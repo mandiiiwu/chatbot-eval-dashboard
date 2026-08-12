@@ -17,9 +17,10 @@ a consistency check that's independent of ground truth.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 
-from . import config, embeddings, fact_check, retrieval
+from . import config, coverage_check, embeddings, fact_check, report, retrieval
 from .ollama_client import chat as target_chat
 
 
@@ -114,3 +115,30 @@ def run_evaluation(questions: list[dict] | None = None, verbose: bool = True) ->
         "avg_tone_consistency_score": avg_tone,
         "questions": per_question,
     }
+
+
+def run_and_save(
+    questions: list[dict] | None = None,
+    skip_coverage_check: bool = False,
+    verbose: bool = True,
+) -> dict:
+    """Load questions (if not given), run the coverage check (V2-H) unless
+    skipped, run the evaluation, and persist results to results/. The single
+    entry point both the CLI (run_eval.py) and the live dashboard's RUN_EVAL
+    button (harness/server.py) call, so the two can't drift out of sync."""
+    questions = questions if questions is not None else load_questions()
+    if not skip_coverage_check:
+        coverage_check.require_coverage(questions)
+
+    results = run_evaluation(questions, verbose=verbose)
+
+    os.makedirs(config.RESULTS_DIR, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    json_path = os.path.join(config.RESULTS_DIR, f"{timestamp}.json")
+    with open(json_path, "w") as f:
+        json.dump(results, f, indent=2)
+    with open(os.path.join(config.RESULTS_DIR, "latest.json"), "w") as f:
+        json.dump(results, f, indent=2)
+    report.write_report(results, os.path.join(config.RESULTS_DIR, "latest.html"))
+
+    return results

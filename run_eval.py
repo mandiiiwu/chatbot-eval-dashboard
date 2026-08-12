@@ -8,11 +8,9 @@ Usage:
 
 import argparse
 import json
-import os
-from datetime import datetime, timezone
 
-from harness import config, coverage_check, report
-from harness.evaluator import run_evaluation
+from harness import config
+from harness.evaluator import run_and_save
 
 
 def main():
@@ -37,22 +35,7 @@ def main():
     with open(args.questions) as f:
         questions = json.load(f)
 
-    if not args.skip_coverage_check:
-        coverage_check.require_coverage(questions)
-
-    results = run_evaluation(questions)
-
-    os.makedirs(config.RESULTS_DIR, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    json_path = os.path.join(config.RESULTS_DIR, f"{timestamp}.json")
-    latest_json = os.path.join(config.RESULTS_DIR, "latest.json")
-    latest_html = os.path.join(config.RESULTS_DIR, "latest.html")
-
-    with open(json_path, "w") as f:
-        json.dump(results, f, indent=2)
-    with open(latest_json, "w") as f:
-        json.dump(results, f, indent=2)
-    report.write_report(results, latest_html)
+    results = run_and_save(questions, skip_coverage_check=args.skip_coverage_check)
 
     print()
     print(f"concern percentage: {results['concern_percentage']}%  "
@@ -60,8 +43,7 @@ def main():
     print(f"avg truthfulness score: {results['avg_truthfulness_score']}")
     print(f"avg tone consistency score: {results['avg_tone_consistency_score']}")
     print()
-    print(f"report: {latest_html}")
-    print(f"raw json: {json_path}")
+    print(f"report: {config.RESULTS_DIR}/latest.html")
 
 
 if __name__ == "__main__":

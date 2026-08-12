@@ -1,188 +1,87 @@
 """Renders a results dict (see evaluator.run_evaluation) to a single
-self-contained HTML file. No JS framework, no build step -- just open it in a
-browser, or serve it live via harness/server.py (Phase 7)."""
+self-contained HTML dashboard. No JS framework, no build step -- just open it
+in a browser, or serve it live via harness/server.py.
 
+v2 layout (2026-08-13), redesigned from a Claude Design handoff package,
+superseding the earlier hero-concern-percentage version: a left rail (run
+config + metadata), Truthfulness/Tone Consistency score panels, a 2-series
+trend chart where clicking any point swaps the ENTIRE dashboard to that run's
+data (client-side -- every comparable run's full per-question data is
+embedded in the page), and questions triaged into Flagged/Minor/Ok groups
+instead of one flat list. The concern-percentage hero figure is intentionally
+dropped per the user's design decision, not an oversight.
+
+Score panels, run-date labels, and the flagged/minor/ok groups are rendered
+entirely client-side from window.__RUNS__ (one shared renderRun() function
+handles both the initial page load and every run-selection click), so there's
+no duplicate rendering logic between Python and JS for that reactive part.
+Only the trend chart's static SVG geometry and the left rail's config/
+metadata (which don't change per selected run -- they describe the current
+setup, not the run being viewed) are server-rendered.
+"""
+
+import glob
 import html
 import json
+import os
 
-from . import history
+from . import config, history
 
-# Palette: dataviz skill's validated default (references/palette.md),
-# categorical slots 1-3 (blue/orange/aqua) for the trend chart's 3 series --
-# validated CVD-safe all-pairs in both light and dark (see PLAN.md Phase 7).
-# Status palette maps directly onto severity: none=good, minor=warning,
-# flag=critical.
+_SEVERITY_LABEL = {"flag": "FLAGGED", "minor": "MINOR", "none": "OK"}
+_SEVERITY_CLASS = {"flag": "critical", "minor": "warning", "none": "good"}
 
-_SEVERITY_BADGE = {
-    "flag": ("FLAGGED", "critical"),
-    "minor": ("minor", "warning"),
-    "none": ("ok", "good"),
-}
-
-_TREND_SERIES = [
-    ("concern_percentage", "series-1", "concern %"),
-    ("avg_truthfulness_score", "series-2", "avg truthfulness"),
-    ("avg_tone_consistency_score", "series-3", "avg tone consistency"),
+# Short, accurate bullets for the score panels' "what does this mean?" hover
+# popups and the static Key panel. Corrected 2026-08-13: an earlier design
+# draft's copy claimed NLI only runs when there's no numeric claim (a
+# short-circuit) -- that's not how fact_check.py actually works. Both the
+# numeric/claim check and NLI entailment always run, independently, and
+# severity escalates to FLAGGED if either one finds a problem (see
+# fact_check.check_answer's docstring for why the short-circuit was removed).
+_TRUTH_BULLETS = [
+    "numeric/claim check and NLI entailment both always run, independently",
+    "flags if either finds a problem: a numeric mismatch, or any sentence NLI-contradicts the reference",
+    "can misread hedging, added detail, or emphasis as neutral/contradiction",
 ]
+_TONE_BULLETS = [
+    "embedding cosine similarity across paraphrased rephrasings of the same question",
+    "no reference corpus involved -- compares the model's own answers to each other",
+    "penalizes legitimate specificity/detail variance, not just tone drift",
+]
+_KEY_ITEMS = [
+    ("flagged", "critical", [
+        "numeric value contradicts the reference",
+        "or any answer sentence NLI-contradicts it",
+    ]),
+    ("minor", "warning", [
+        "no contradiction, but a sentence isn't clearly entailed (NLI-neutral)",
+        "often just detail the reference doesn't cover, not an error",
+    ]),
+    ("ok", "good", [
+        "every sentence entailed by the reference",
+        "and no numeric mismatch",
+    ]),
+]
+_KEY_CAVEAT = "not 100% reliable -- NLI can misread hedging as contradiction"
 
 
-_NLI_LABEL_STATUS = {"entailment": "good", "neutral": "warning", "contradiction": "critical"}
+def _corpus_files() -> list[str]:
+    return sorted(os.path.basename(p) for p in glob.glob(os.path.join(config.CORPUS_DIR, "*.md")))
 
 
-def _evidence_html(evidence: dict | None) -> str:
-    """Claim-level breakdown: which numeric values were checked and whether
-    they matched, plus the per-sentence NLI entailment/neutral/contradiction
-    confidence behind the verdict -- this data was always computed by
-    fact_check.py but never surfaced in the UI until now."""
-    if not evidence:
-        return ""
-    numeric = evidence.get("numeric", {})
-    mismatches = numeric.get("mismatches", [])
-    per_sentence = evidence.get("nli_per_sentence", [])
-    parts = []
-
-    if mismatches:
-        items = "".join(
-            f"<li><b>{html.escape(str(m['kind']))}</b> &mdash; answer: <code>{html.escape(str(m['answer_value']))}</code>, "
-            f"reference: <code>{html.escape(str(m['reference_values']))}</code></li>"
-            for m in mismatches
-        )
-        parts.append(f'<div class="evidence-block status-critical"><b>Numeric check &mdash; mismatch</b><ul>{items}</ul></div>')
-    elif numeric.get("checked"):
-        parts.append(
-            f'<div class="evidence-block status-good"><b>Numeric check</b> &mdash; '
-            f'{numeric["checked"]} value(s) extracted from the answer, all consistent with the reference.</div>'
-        )
-
-    if per_sentence:
-        rows = []
-        for s in per_sentence:
-            label = s.get("label", "neutral")
-            status = _NLI_LABEL_STATUS.get(label, "warning")
-            bar = "".join(
-                f'<div class="conf-seg conf-{lbl}" style="width:{s.get(lbl, 0) * 100:.1f}%"></div>'
-                for lbl in ("entailment", "neutral", "contradiction")
-            )
-            rows.append(f"""
-            <div class="evidence-row">
-              <div class="evidence-sentence">{html.escape(s['sentence'])}</div>
-              <div class="conf-bar" title="entailment {s.get('entailment', 0) * 100:.0f}% / neutral {s.get('neutral', 0) * 100:.0f}% / contradiction {s.get('contradiction', 0) * 100:.0f}%">{bar}</div>
-              <div class="evidence-verdict status-{status}">{label} {s.get(label, 0) * 100:.0f}%</div>
-            </div>
-            """)
-        parts.append(f'<div class="evidence-block"><b>Sentence-level NLI breakdown</b>{"".join(rows)}</div>')
-
-    if not parts:
-        return ""
-    return f'<div class="evidence-section">{"".join(parts)}</div>'
-
-
-def _row_html(q: dict) -> str:
-    severity = q.get("severity", "flag" if q["concern"] else "none")
-    label, status = _SEVERITY_BADGE.get(severity, _SEVERITY_BADGE["flag"])
-    return f"""
-    <details class="question-row status-{status}" id="q-{html.escape(q['id'])}">
-      <summary>
-        <span class="qid">{html.escape(q['id'])}</span>
-        <span class="qtext">{html.escape(q['question'])}</span>
-        <span class="badge status-{status}"><span class="badge-dot"></span>{label}</span>
-        <span class="score">truthfulness {q['truthfulness_score']}</span>
-        <span class="score">tone {q['tone_consistency_score']}</span>
-      </summary>
-      <div class="detail">
-        <p><b>Fact-check verdict:</b> {html.escape(q['reason'])}</p>
-        {_evidence_html(q.get('evidence'))}
-        <p><b>Ungrounded answer</b> (target model, no reference):</p>
-        <pre>{html.escape(q['ungrounded_answer'])}</pre>
-        <p><b>Grounded answer</b> (target model + retrieved context):</p>
-        <pre>{html.escape(q['grounded_answer'])}</pre>
-        <p><b>Reference context used:</b></p>
-        <pre>{html.escape(q['reference_context'] or '(none found)')}</pre>
-      </div>
-    </details>
-    """
-
-
-# Each tooltip is a short list of one-line reasons, not a paragraph --
-# placeholder-quality copy is fine here, this earns a real pass in the final
-# product per the user's note (2026-08-12) that this doesn't need polishing now.
-_TOOLTIPS: dict[str, list[str]] = {
-    "concern %": ["share of questions flagged this run"],
-    "truthfulness": ["numeric check + small NLI model vs. reference", "can misread emphasis as contradiction"],
-    "tone consistency": ["does rephrasing change the answer?", "unrelated to correctness"],
-    "FLAGGED": ["real error", "overstated certainty", "reference too narrow"],
-    "minor": ["not clearly supported, not contradicted", "often just correct extra detail"],
-    "ok": ["consistent with the reference"],
-}
-
-
-def _hoverable(label: str, extra_class: str = "") -> str:
-    """A short label with its fuller interpretation revealed on hover, not
-    shown by default."""
-    bullets = "".join(f"<span>{html.escape(line)}</span>" for line in _TOOLTIPS.get(label, []))
-    return f'<span class="info-hover {extra_class}">{label}<span class="tooltip-content">{bullets}</span></span>'
-
-
-def _key_html() -> str:
-    """Compact legend, hover for the short version of "why" -- not a wall of
-    text by default. See _TOOLTIPS for content."""
-    return f"""
-    <div class="key-strip">
-      {_hoverable("concern %")}
-      {_hoverable("truthfulness")}
-      {_hoverable("tone consistency")}
-      {_hoverable("FLAGGED", "badge status-critical")}
-      {_hoverable("minor", "badge status-warning")}
-      {_hoverable("ok", "badge status-good")}
-    </div>
-    """
-
-
-def _attention_feed_html(questions: list[dict]) -> str:
-    """Flagged/minor questions pulled out into their own compact,
-    triage-first list -- a real dashboard's job is "what needs my attention,"
-    not making the reader scan every row to find the two that matter."""
-    flagged = [q for q in questions if q.get("severity") == "flag"]
-    minor = [q for q in questions if q.get("severity") == "minor"]
-    if not flagged and not minor:
-        return '<p class="attention-empty">Nothing flagged or minor this run &mdash; every answer checked out clean.</p>'
-
-    items = []
-    for q in flagged + minor:
-        label, status = _SEVERITY_BADGE.get(q.get("severity"), _SEVERITY_BADGE["flag"])
-        items.append(f"""
-        <a class="attention-item status-{status}" href="#q-{html.escape(q['id'])}">
-          <span class="badge status-{status}"><span class="badge-dot"></span>{label}</span>
-          <span class="attention-qid">{html.escape(q['id'])}</span>
-          <span class="attention-reason">{html.escape(q['reason'])}</span>
-        </a>
-        """)
-    return f'<div class="attention-feed">{"".join(items)}</div>'
-
-
-def _stat_tile(label: str, value: str, sub: str = "") -> str:
-    sub_html = f'<div class="stat-sub">{html.escape(sub)}</div>' if sub else ""
-    return f"""
-    <div class="stat-tile">
-      <div class="stat-label">{html.escape(label)}</div>
-      <div class="stat-value">{html.escape(str(value))}</div>
-      {sub_html}
-    </div>
-    """
-
-
-def _trend_chart_html(runs: list[dict]) -> str:
-    """Line chart, 3 series, with a JS crosshair + tooltip (per the dataviz
-    skill's interaction spec) and a table-view twin for accessibility."""
+def _trend_chart_svg(runs: list[dict]) -> str:
+    """Static SVG geometry for all comparable runs -- 2 series (truthfulness,
+    tone consistency). Points carry data-run attributes; JS toggles a
+    'selected' class and moves the guide line on click, it doesn't redraw
+    the chart."""
     if len(runs) < 2:
-        return f"""
-        <p class="trend-note">Only {len(runs)} run{'s' if len(runs) != 1 else ''} so far on the
-        current architecture -- need at least 2 to show a trend. Runs from earlier
-        architectures (different target model, judge, or retrieval mechanism) are
-        intentionally excluded since their numbers aren't directly comparable.</p>
-        """
+        return (
+            f'<p class="trend-note">Only {len(runs)} run{"s" if len(runs) != 1 else ""} so far on the '
+            "current architecture -- need at least 2 to show a trend. Runs from earlier "
+            "architectures (different target model, judge, or retrieval mechanism) are "
+            "intentionally excluded since their numbers aren't directly comparable.</p>"
+        )
 
-    w, h, pad_l, pad_r, pad_t, pad_b = 640, 220, 36, 16, 16, 28
+    w, h, pad_l, pad_r, pad_t, pad_b = 900, 200, 30, 20, 14, 26
     n = len(runs)
 
     def x_of(i: int) -> float:
@@ -197,125 +96,82 @@ def _trend_chart_html(runs: list[dict]) -> str:
         for v in (0, 25, 50, 75, 100)
     )
 
+    series = [("avg_truthfulness_score", "trend-truth"), ("avg_tone_consistency_score", "trend-tone")]
     series_svg = []
-    legend_items = []
-    end_labels = []
-    for key, css_class, label in _TREND_SERIES:
+    for key, css_class in series:
         pts = [(x_of(i), y_of(r[key])) for i, r in enumerate(runs)]
         points_attr = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
         dots = "".join(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" class="dot {css_class}" '
-            f'data-run="{i}" data-series="{html.escape(label)}" data-value="{runs[i][key]}" />'
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" class="trend-dot {css_class}" '
+            f'data-run="{i}" onclick="selectRun({i})" />'
             for i, (x, y) in enumerate(pts)
         )
         series_svg.append(f'<polyline points="{points_attr}" class="trend-line {css_class}" />{dots}')
-        legend_items.append(f'<span class="legend-item"><span class="legend-swatch {css_class}"></span>{html.escape(label)}</span>')
-        last_x, last_y = pts[-1]
-        end_labels.append(
-            f'<text x="{last_x + 6:.1f}" y="{last_y + 4:.1f}" class="end-label {css_class}">{runs[-1][key]}</text>'
-        )
 
-    # invisible per-run hit columns drive the crosshair via mousemove
     hit_columns = "".join(
         f'<rect x="{x_of(i) - (w / n) / 2:.1f}" y="{pad_t}" width="{(w - pad_l - pad_r) / max(n - 1, 1):.1f}" '
-        f'height="{h - pad_t - pad_b}" class="hit-col" data-run="{i}" />'
+        f'height="{h - pad_t - pad_b}" class="hit-col" data-run="{i}" onclick="selectRun({i})" />'
         for i in range(n)
     )
 
-    table_rows = "".join(
-        f"<tr><td>{html.escape(r.get('timestamp', '?'))}</td>"
-        f"<td>{r['concern_percentage']}%</td><td>{r['avg_truthfulness_score']}</td>"
-        f"<td>{r['avg_tone_consistency_score']}</td><td>{r['flagged_count']}/{r['num_questions']}</td></tr>"
-        for r in runs
-    )
-    timestamps_json = json.dumps([r.get("timestamp", "?") for r in runs])
+    guide_x = [x_of(i) for i in range(n)]
+    guide_x_json = json.dumps(guide_x)
 
     return f"""
-    <div class="chart-container">
-      <svg viewBox="0 0 {w} {h}" class="trend-svg" id="trend-svg">
-        {gridlines}
-        <line x1="{pad_l}" y1="{h - pad_b}" x2="{w - pad_r}" y2="{h - pad_b}" class="axis-line" />
-        {''.join(series_svg)}
-        {''.join(end_labels)}
-        <line id="crosshair" x1="0" y1="{pad_t}" x2="0" y2="{h - pad_b}" class="crosshair" style="display:none" />
-        {hit_columns}
-      </svg>
-      <div id="trend-tooltip" class="trend-tooltip" style="display:none"></div>
+    <svg viewBox="0 0 {w} {h}" class="trend-svg" id="trend-svg" data-guide-x='{guide_x_json}'>
+      {gridlines}
+      <line x1="{pad_l}" y1="{h - pad_b}" x2="{w - pad_r}" y2="{h - pad_b}" class="axis-line" />
+      {''.join(series_svg)}
+      <line id="trend-guide" x1="0" y1="{pad_t}" x2="0" y2="{h - pad_b}" class="trend-guide" />
+      {hit_columns}
+    </svg>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-swatch trend-truth"></span>truthfulness</span>
+      <span class="legend-item"><span class="legend-swatch trend-tone"></span>tone consistency</span>
     </div>
-    <div class="legend">{''.join(legend_items)}</div>
     <details class="table-toggle">
       <summary>View as table</summary>
       <table class="trend-table">
-        <thead><tr><th>timestamp (UTC)</th><th>concern %</th><th>avg truthfulness</th>
-        <th>avg tone</th><th>flagged</th></tr></thead>
-        <tbody>{table_rows}</tbody>
+        <thead><tr><th>timestamp (UTC)</th><th>truthfulness</th><th>tone consistency</th><th>flagged</th></tr></thead>
+        <tbody>{"".join(
+            f"<tr><td>{html.escape(r.get('timestamp', '?'))}</td><td>{r['avg_truthfulness_score']}</td>"
+            f"<td>{r['avg_tone_consistency_score']}</td><td>{r['flagged_count']}/{r['num_questions']}</td></tr>"
+            for r in runs
+        )}</tbody>
       </table>
     </details>
-    <script>
-      (function() {{
-        const timestamps = {timestamps_json};
-        const svg = document.getElementById('trend-svg');
-        const crosshair = document.getElementById('crosshair');
-        const tooltip = document.getElementById('trend-tooltip');
-        if (!svg) return;
-        svg.querySelectorAll('.hit-col').forEach(function(col) {{
-          col.addEventListener('pointerenter', show);
-          col.addEventListener('pointermove', show);
-          col.addEventListener('pointerleave', hide);
-        }});
-        function show(e) {{
-          const run = e.target.getAttribute('data-run');
-          const x = e.target.getAttribute('x');
-          const w = e.target.getAttribute('width');
-          const cx = parseFloat(x) + parseFloat(w) / 2;
-          crosshair.setAttribute('x1', cx);
-          crosshair.setAttribute('x2', cx);
-          crosshair.style.display = 'block';
-          const dots = svg.querySelectorAll('.dot[data-run="' + run + '"]');
-          let rowsHtml = '';
-          dots.forEach(function(dot) {{
-            const seriesEl = document.createElement('span');
-            seriesEl.textContent = dot.getAttribute('data-series');
-            const cls = Array.from(dot.classList).find(function(c) {{ return c.startsWith('series-'); }});
-            rowsHtml += '<div class="tooltip-row"><span class="tooltip-key ' + cls + '"></span>' +
-              '<span class="tooltip-value">' + dot.getAttribute('data-value') + '</span> ' +
-              '<span class="tooltip-series">' + seriesEl.textContent + '</span></div>';
-          }});
-          const tsEl = document.createElement('div');
-          tsEl.className = 'tooltip-ts';
-          tsEl.textContent = timestamps[run] || '';
-          tooltip.innerHTML = '';
-          tooltip.appendChild(tsEl);
-          const body = document.createElement('div');
-          body.innerHTML = rowsHtml;
-          tooltip.appendChild(body);
-          tooltip.style.display = 'block';
-          const rect = svg.getBoundingClientRect();
-          const scale = rect.width / {w};
-          tooltip.style.left = Math.min(cx * scale - 60, rect.width - 160) + 'px';
-          tooltip.style.top = '4px';
-        }}
-        function hide() {{
-          crosshair.style.display = 'none';
-          tooltip.style.display = 'none';
-        }}
-      }})();
-    </script>
+    """
+
+
+def _key_panel_html() -> str:
+    items = "".join(
+        f"""
+        <div class="key-item">
+          <div class="key-label status-{cls}">{label}</div>
+          <ul>{"".join(f"<li>{html.escape(b)}</li>" for b in bullets)}</ul>
+        </div>
+        """
+        for label, cls, bullets in _KEY_ITEMS
+    )
+    return f"""
+    <div class="key-panel">
+      <span class="section-label">[KEY]</span>
+      {items}
+      <p class="key-caveat">{html.escape(_KEY_CAVEAT)}</p>
+    </div>
     """
 
 
 def render_html(results: dict) -> str:
-    pct = results["concern_percentage"]
-    pct_status = "good" if pct < 15 else ("warning" if pct < 40 else "critical")
-    rows = "\n".join(_row_html(q) for q in results["questions"])
     runs = history.load_comparable_runs()
+    if not runs or runs[-1].get("timestamp") != results.get("timestamp"):
+        runs = runs + [results]
 
-    stat_tiles = "".join([
-        _stat_tile("flagged", results["flagged_count"], f"of {results['num_questions']} questions"),
-        _stat_tile("minor", results.get("minor_count", 0)),
-        _stat_tile("avg truthfulness", results["avg_truthfulness_score"]),
-        _stat_tile("avg tone consistency", results["avg_tone_consistency_score"]),
-    ])
+    runs_json = json.dumps(runs)
+    corpus_files = _corpus_files()
+    corpus_summary = f"{len(corpus_files)} file{'s' if len(corpus_files) != 1 else ''}"
+    truth_bullets_html = "".join(f"<span>{html.escape(b)}</span>" for b in _TRUTH_BULLETS)
+    tone_bullets_html = "".join(f"<span>{html.escape(b)}</span>" for b in _TONE_BULLETS)
 
     return f"""<!doctype html>
 <html>
@@ -323,262 +179,434 @@ def render_html(results: dict) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chatbot Eval Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  :root {{
+    --good: #1f8a4c; --warning: #c8860d; --bad: #c94a3f;
+    --good-bg: rgba(31,138,76,0.12); --warning-bg: rgba(200,134,13,0.12); --bad-bg: rgba(201,74,63,0.12);
+  }}
   .viz-root {{
-    color-scheme: light;
-    --surface-1:      #fcfcfb;
-    --page-plane:      #f9f9f7;
-    --text-primary:   #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted:     #898781;
-    --gridline:       #e1e0d9;
-    --axis:           #c3c2b7;
-    --border:         rgba(11,11,11,0.10);
-    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
-    --status-good: #0ca30c; --status-warning: #fab219; --status-critical: #d03b3b;
-    --status-good-bg: #eaf7ea; --status-warning-bg: #fff6e0; --status-critical-bg: #fbeaea;
-  }}
-  @media (prefers-color-scheme: dark) {{
-    :root:where(:not([data-theme="light"])) .viz-root {{
-      color-scheme: dark;
-      --surface-1:      #1a1a19;
-      --page-plane:      #0d0d0d;
-      --text-primary:   #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted:     #898781;
-      --gridline:       #2c2c2a;
-      --axis:           #383835;
-      --border:         rgba(255,255,255,0.10);
-      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
-      --status-good: #0ca30c; --status-warning: #fab219; --status-critical: #e66767;
-      --status-good-bg: #10240f; --status-warning-bg: #2a220a; --status-critical-bg: #2a1414;
-    }}
-  }}
-  :root[data-theme="dark"] .viz-root {{
     color-scheme: dark;
-    --surface-1:      #1a1a19;
-    --page-plane:      #0d0d0d;
-    --text-primary:   #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted:     #898781;
-    --gridline:       #2c2c2a;
-    --axis:           #383835;
-    --border:         rgba(255,255,255,0.10);
-    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
-    --status-good: #0ca30c; --status-warning: #fab219; --status-critical: #e66767;
-    --status-good-bg: #10240f; --status-warning-bg: #2a220a; --status-critical-bg: #2a1414;
+    --bg:     #151715;
+    --border: #2c302d;
+    --track:  #20221f;
+    --text:   #c9d1c9;
+    --muted:  #7c877c;
+    --faint:  #565c56;
+    --trend-truth: #c9d1c9;
+    --trend-tone:  #4a5c4a;
+  }}
+  :root[data-theme="light"] .viz-root {{
+    color-scheme: light;
+    --bg:     #e9e4d8;
+    --border: #cdc7b8;
+    --track:  #ddd7c8;
+    --text:   #26292b;
+    --muted:  #63665f;
+    --faint:  #8b8d85;
+    --trend-truth: #26292b;
+    --trend-tone:  #9a998f;
   }}
 
   * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; }}
-  .viz-root {{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-              background: var(--page-plane); color: var(--text-primary);
-              min-height: 100vh; margin: 0 auto; }}
-  .viz-inner {{ max-width: 880px; margin: 0 auto; padding: 32px 20px 64px; }}
-  header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }}
-  h1 {{ font-size: 1.25rem; font-weight: 600; margin: 0; }}
-  h2 {{ font-size: 1rem; font-weight: 600; margin: 0 0 12px; color: var(--text-primary); }}
-  #theme-toggle {{ font: inherit; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px;
-                   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
-                   cursor: pointer; }}
-
-  .hero-row {{ display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 32px; }}
-  .hero-figure {{ font-size: 3.2rem; font-weight: 600; line-height: 1;
-                  color: var(--status-{pct_status}); }}
-  .hero-sub {{ font-size: 0.8rem; color: var(--text-secondary); margin-top: 6px; }}
-  .kpi-row {{ display: flex; gap: 12px; flex-wrap: wrap; flex: 1; }}
-  .stat-tile {{ background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
-               padding: 10px 14px; min-width: 110px; }}
-  .stat-label {{ font-size: 0.72rem; color: var(--text-muted); text-transform: lowercase; }}
-  .stat-value {{ font-size: 1.4rem; font-weight: 600; margin-top: 2px; }}
-  .stat-sub {{ font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }}
-
-  section {{ margin-bottom: 36px; }}
-  .trend-note {{ color: var(--text-secondary); font-size: 0.85rem; }}
-  .chart-container {{ position: relative; }}
-  .trend-svg {{ width: 100%; height: auto; overflow: visible; }}
-  .gridline {{ stroke: var(--gridline); stroke-width: 1; }}
-  .axis-line {{ stroke: var(--axis); stroke-width: 1; }}
-  .axis-label {{ font-size: 9px; fill: var(--text-muted); font-family: system-ui, sans-serif; }}
-  .trend-line {{ fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }}
-  .trend-line.series-1 {{ stroke: var(--series-1); }}
-  .trend-line.series-2 {{ stroke: var(--series-2); }}
-  .trend-line.series-3 {{ stroke: var(--series-3); }}
-  .dot {{ stroke: var(--surface-1); stroke-width: 2; cursor: pointer; }}
-  .dot.series-1 {{ fill: var(--series-1); }}
-  .dot.series-2 {{ fill: var(--series-2); }}
-  .dot.series-3 {{ fill: var(--series-3); }}
-  .end-label {{ font-size: 10px; font-weight: 600; font-family: system-ui, sans-serif; }}
-  .end-label.series-1 {{ fill: var(--series-1); }}
-  .end-label.series-2 {{ fill: var(--series-2); }}
-  .end-label.series-3 {{ fill: var(--series-3); }}
-  .hit-col {{ fill: transparent; }}
-  .crosshair {{ stroke: var(--axis); stroke-width: 1; pointer-events: none; }}
-  .trend-tooltip {{ position: absolute; background: var(--surface-1); border: 1px solid var(--border);
-                    border-radius: 6px; padding: 8px 10px; font-size: 0.75rem; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-                    pointer-events: none; min-width: 150px; }}
-  .tooltip-ts {{ color: var(--text-muted); font-size: 0.68rem; margin-bottom: 4px; }}
-  .tooltip-row {{ display: flex; align-items: center; gap: 6px; margin-top: 2px; }}
-  .tooltip-key {{ width: 12px; height: 2px; border-radius: 1px; display: inline-block; }}
-  .tooltip-key.series-1 {{ background: var(--series-1); }}
-  .tooltip-key.series-2 {{ background: var(--series-2); }}
-  .tooltip-key.series-3 {{ background: var(--series-3); }}
-  .tooltip-value {{ font-weight: 600; color: var(--text-primary); }}
-  .tooltip-series {{ color: var(--text-secondary); }}
-  .legend {{ display: flex; gap: 16px; font-size: 0.78rem; color: var(--text-secondary); margin-top: 10px; flex-wrap: wrap; }}
-  .legend-item {{ display: flex; align-items: center; gap: 5px; }}
-  .legend-swatch {{ width: 10px; height: 10px; border-radius: 2px; display: inline-block; }}
-  .legend-swatch.series-1 {{ background: var(--series-1); }}
-  .legend-swatch.series-2 {{ background: var(--series-2); }}
-  .legend-swatch.series-3 {{ background: var(--series-3); }}
-  .table-toggle {{ margin-top: 10px; font-size: 0.8rem; }}
-  .table-toggle summary {{ cursor: pointer; color: var(--text-secondary); }}
-  .trend-table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.78rem;
-                  font-variant-numeric: tabular-nums; }}
-  .trend-table th, .trend-table td {{ text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--gridline); }}
-  .trend-table th {{ color: var(--text-muted); font-weight: 500; }}
-
-  .question-row {{ border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
-                   padding: 10px 14px; background: var(--surface-1); }}
-  .question-row.status-critical {{ border-color: var(--status-critical); }}
-  .question-row.status-warning {{ border-color: var(--status-warning); }}
-  summary {{ cursor: pointer; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }}
-  .qid {{ font-family: ui-monospace, monospace; color: var(--text-muted); font-size: 0.8rem; }}
-  .qtext {{ flex: 1; min-width: 200px; }}
-  .badge {{ font-size: 0.72rem; font-weight: 600; padding: 3px 9px 3px 7px; border-radius: 20px;
-           display: inline-flex; align-items: center; gap: 5px; }}
-  .badge-dot {{ width: 6px; height: 6px; border-radius: 50%; display: inline-block; }}
-  .badge.status-good {{ background: var(--status-good-bg); color: var(--status-good); }}
-  .badge.status-good .badge-dot {{ background: var(--status-good); }}
-  .badge.status-warning {{ background: var(--status-warning-bg); color: #9a6a00; }}
-  .badge.status-warning .badge-dot {{ background: var(--status-warning); }}
-  .badge.status-critical {{ background: var(--status-critical-bg); color: var(--status-critical); }}
-  .badge.status-critical .badge-dot {{ background: var(--status-critical); }}
-  .score {{ font-size: 0.72rem; color: var(--text-secondary); background: var(--page-plane);
-           padding: 2px 8px; border-radius: 4px; }}
-  .detail pre {{ background: var(--page-plane); padding: 10px; border-radius: 6px; white-space: pre-wrap;
-                font-size: 0.82rem; color: var(--text-primary); }}
-  .detail p {{ font-size: 0.85rem; }}
-
-  .evidence-section {{ margin: 10px 0 16px; }}
-  .evidence-block {{ background: var(--page-plane); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;
-                     font-size: 0.82rem; border-left: 3px solid var(--border); }}
-  .evidence-block.status-critical {{ border-left-color: var(--status-critical); }}
-  .evidence-block.status-good {{ border-left-color: var(--status-good); }}
-  .evidence-block ul {{ margin: 6px 0 0; padding-left: 18px; }}
-  .evidence-block code {{ font-family: ui-monospace, monospace; font-size: 0.78rem; }}
-  .evidence-row {{ display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }}
-  .evidence-sentence {{ flex: 1; min-width: 200px; font-size: 0.8rem; color: var(--text-secondary); }}
-  .conf-bar {{ display: flex; width: 100px; height: 8px; border-radius: 4px; overflow: hidden;
-              background: var(--gridline); flex-shrink: 0; }}
-  .conf-seg {{ height: 100%; }}
-  .conf-seg.conf-entailment {{ background: var(--status-good); }}
-  .conf-seg.conf-neutral {{ background: var(--status-warning); }}
-  .conf-seg.conf-contradiction {{ background: var(--status-critical); }}
-  .evidence-verdict {{ font-size: 0.75rem; font-weight: 600; min-width: 90px; text-align: right; }}
-  .evidence-verdict.status-good {{ color: var(--status-good); }}
-  .evidence-verdict.status-warning {{ color: #9a6a00; }}
-  .evidence-verdict.status-critical {{ color: var(--status-critical); }}
-
-  .key-strip {{ display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.76rem;
-               color: var(--text-secondary); margin-bottom: 20px; align-items: center; }}
-  .key-strip .badge {{ transform: scale(0.85); }}
-
-  .info-hover {{ position: relative; cursor: help; border-bottom: 1px dotted var(--text-muted); }}
-  .info-hover.badge {{ border-bottom: none; }}
-  .info-hover .tooltip-content {{
-    visibility: hidden; opacity: 0; position: absolute; bottom: 130%; left: 0;
-    background: var(--text-primary); color: var(--surface-1); padding: 8px 10px;
-    border-radius: 6px; font-size: 0.7rem; width: max-content; max-width: 200px;
-    line-height: 1.5; transition: opacity 0.12s ease; z-index: 20;
-    display: flex; flex-direction: column; gap: 2px; font-weight: 400;
-    text-transform: none; pointer-events: none;
+  .viz-root {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh;
   }}
-  .info-hover:hover .tooltip-content {{ visibility: visible; opacity: 1; }}
-  .tooltip-content span:before {{ content: "\\2022  "; color: var(--text-muted); }}
+  .layout {{ display: flex; align-items: stretch; min-height: 100vh; }}
 
-  .attention-empty {{ color: var(--text-secondary); font-size: 0.85rem; }}
-  .attention-feed {{ display: flex; flex-direction: column; gap: 6px; }}
-  .attention-item {{ display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px;
-                     background: var(--surface-1); border: 1px solid var(--border); text-decoration: none;
-                     color: var(--text-primary); font-size: 0.82rem; }}
-  .attention-item.status-critical {{ border-left: 3px solid var(--status-critical); }}
-  .attention-item.status-warning {{ border-left: 3px solid var(--status-warning); }}
-  .attention-item:hover {{ background: var(--page-plane); }}
-  .attention-qid {{ font-family: ui-monospace, monospace; color: var(--text-muted); font-size: 0.75rem; }}
-  .attention-reason {{ color: var(--text-secondary); flex: 1; }}
+  /* --- left rail --- */
+  .rail {{ width: 200px; flex-shrink: 0; border-right: 1px solid var(--border);
+          padding: 18px 16px; display: flex; flex-direction: column; gap: 14px; }}
+  .live-line {{ display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }}
+  .live-dot {{ width: 6px; height: 6px; border-radius: 50%; background: var(--good); flex-shrink: 0; }}
+  .section-label {{ font-size: 12px; color: var(--muted); font-weight: 600; }}
+  .rail-field {{ display: flex; flex-direction: column; gap: 4px; }}
+  .rail-field-label {{ font-size: 10px; color: var(--muted); }}
+  .rail-box {{ border: 1px solid var(--border); padding: 8px 10px; font-size: 11px; word-break: break-word; }}
+  .rail-box.dashed {{ border-style: dashed; color: var(--muted); }}
+  .run-eval-btn {{ margin-top: 2px; padding: 10px; border: 1px solid var(--text); background: var(--text);
+                   color: var(--bg); font: 600 11px 'IBM Plex Mono'; cursor: pointer; }}
+  .run-eval-btn:disabled {{ opacity: 0.5; cursor: default; }}
+  .run-eval-error {{ font-size: 10px; color: var(--bad); display: none; }}
+  .rail-divider {{ border: none; border-top: 1px solid var(--border); margin: 0; }}
+  .meta-row {{ display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-top: 6px; }}
+  .meta-value {{ color: var(--text); }}
+
+  /* --- main content --- */
+  .main {{ flex: 1; min-width: 0; padding: 16px 24px 40px; }}
+  .header-strip {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }}
+  #run-label-header {{ font-size: 12px; color: var(--muted); }}
+  #theme-toggle {{ display: flex; gap: 6px; border: 1px solid var(--border); background: transparent;
+                   color: var(--text); cursor: pointer; font: 11px 'IBM Plex Mono'; padding: 5px 10px; }}
+  #theme-toggle .dim {{ opacity: 0.35; }}
+
+  .panels-row {{ display: flex; gap: 16px; margin-bottom: 18px; }}
+  .score-panel {{ flex: 1; border: 1px solid var(--border); padding: 16px; display: flex;
+                 flex-direction: column; gap: 8px; position: relative; }}
+  .score-figure {{ display: flex; align-items: baseline; gap: 8px; }}
+  .score-figure .num {{ font-size: 38px; font-weight: 600; }}
+  .score-figure .of100 {{ font-size: 12px; color: var(--muted); }}
+  .score-bar-track {{ height: 6px; background: var(--track); overflow: hidden; }}
+  .score-bar-fill {{ height: 100%; }}
+  .meaning-trigger {{ font-size: 10px; color: var(--muted); text-decoration: underline dotted; cursor: help;
+                      width: fit-content; }}
+  .meaning-popup {{ display: none; position: absolute; left: 0; right: 0; bottom: 0; background: var(--bg);
+                    border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,0.3); padding: 12px 14px;
+                    font-size: 10px; color: var(--muted); flex-direction: column; gap: 4px; z-index: 5; }}
+  .meaning-popup span:before {{ content: "\\2022  "; color: var(--muted); }}
+  .score-panel:hover .meaning-popup {{ display: flex; }}
+
+  section {{ margin-bottom: 20px; }}
+  .trend-box {{ border: 1px solid var(--border); padding: 18px; }}
+  .trend-note {{ color: var(--muted); font-size: 0.85rem; margin: 0; }}
+  .trend-svg {{ width: 100%; height: auto; overflow: visible; cursor: pointer; }}
+  .gridline {{ stroke: var(--border); stroke-width: 1; }}
+  .axis-line {{ stroke: var(--border); stroke-width: 1; }}
+  .axis-label {{ font-size: 9px; fill: var(--muted); font-family: 'IBM Plex Mono'; }}
+  .trend-line {{ fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }}
+  .trend-line.trend-truth {{ stroke: var(--trend-truth); }}
+  .trend-line.trend-tone {{ stroke: var(--trend-tone); }}
+  .trend-dot {{ stroke: var(--bg); stroke-width: 2; cursor: pointer; }}
+  .trend-dot.trend-truth {{ fill: var(--trend-truth); }}
+  .trend-dot.trend-tone {{ fill: var(--trend-tone); }}
+  .trend-dot.selected {{ r: 6; }}
+  .hit-col {{ fill: transparent; cursor: pointer; }}
+  .trend-guide {{ stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }}
+  .legend {{ display: flex; gap: 16px; font-size: 0.75rem; color: var(--muted); margin-top: 10px; }}
+  .legend-item {{ display: flex; align-items: center; gap: 5px; }}
+  .legend-swatch {{ width: 10px; height: 2px; display: inline-block; }}
+  .legend-swatch.trend-truth {{ background: var(--trend-truth); }}
+  .legend-swatch.trend-tone {{ background: var(--trend-tone); }}
+  .table-toggle {{ margin-top: 10px; font-size: 0.78rem; }}
+  .table-toggle summary {{ cursor: pointer; color: var(--muted); }}
+  .trend-table {{ width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.76rem; }}
+  .trend-table th, .trend-table td {{ text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }}
+  .trend-table th {{ color: var(--muted); font-weight: 500; }}
+
+  .groups-row {{ display: flex; gap: 16px; align-items: flex-start; }}
+  .groups-col {{ flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }}
+  .sev-group summary {{ cursor: pointer; font-size: 12px; font-weight: 600; list-style: none; }}
+  .sev-group summary::-webkit-details-marker {{ display: none; }}
+  .sev-group summary:before {{ content: "\\25b8  "; color: var(--muted); }}
+  .sev-group[open] summary:before {{ content: "\\25be  "; }}
+  .sev-group.status-critical summary {{ color: var(--bad); }}
+  .sev-group.status-warning summary {{ color: var(--warning); }}
+  .sev-group.status-good summary {{ color: var(--good); }}
+  .sev-group-body {{ margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }}
+  .sev-empty {{ font-size: 11px; color: var(--muted); }}
+
+  .q-row {{ border: 1px solid var(--border); padding: 8px 10px; font-size: 11px; }}
+  .q-row.status-critical {{ border-color: var(--bad); }}
+  .q-row.status-warning {{ border-color: var(--warning); }}
+  .q-row summary {{ cursor: pointer; display: flex; justify-content: space-between; gap: 10px; list-style: none; }}
+  .q-row summary::-webkit-details-marker {{ display: none; }}
+  .q-row .qtext {{ flex: 1; }}
+  .q-row .qscores {{ color: var(--muted); flex-shrink: 0; }}
+  .q-row-ok {{ display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px;
+              border: 1px solid var(--border); font-size: 11px; }}
+  .q-row-ok .qtext {{ flex: 1; }}
+  .q-row-ok .qscores {{ color: var(--muted); }}
+  .q-detail {{ margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }}
+  .q-verdict {{ color: var(--muted); }}
+  .numeric-readout {{ display: flex; gap: 8px; }}
+  .numeric-box {{ flex: 1; border: 1px solid var(--border); padding: 6px 8px; font-size: 10px; }}
+  .numeric-box .k {{ color: var(--muted); }}
+  .numeric-box.answer {{ border-color: var(--bad); color: var(--bad); }}
+  .numeric-box.reference {{ color: var(--muted); }}
+  .nli-block {{ display: flex; flex-direction: column; gap: 4px; }}
+  .nli-row {{ display: flex; align-items: center; gap: 8px; }}
+  .nli-sentence {{ flex: 1; font-size: 10px; color: var(--muted); }}
+  .nli-bar {{ display: flex; width: 80px; height: 6px; flex-shrink: 0; }}
+  .nli-seg.entailment {{ background: var(--good); }}
+  .nli-seg.neutral {{ background: var(--warning); }}
+  .nli-seg.contradiction {{ background: var(--bad); }}
+  .nli-label {{ font-size: 10px; min-width: 90px; text-align: right; flex-shrink: 0; }}
+  .nli-label.status-good {{ color: var(--good); }}
+  .nli-label.status-warning {{ color: var(--warning); }}
+  .nli-label.status-critical {{ color: var(--bad); }}
+  .full-answers-toggle summary {{ cursor: pointer; font-size: 10px; color: var(--muted); text-decoration: underline; }}
+  .full-answers-toggle pre {{ background: var(--track); padding: 8px; white-space: pre-wrap; font-size: 10px;
+                              margin: 6px 0 0; }}
+  .full-answers-toggle p {{ margin: 8px 0 2px; font-size: 10px; color: var(--muted); }}
+
+  .key-panel {{ width: 230px; flex-shrink: 0; border: 1px solid var(--border); padding: 14px;
+               display: flex; flex-direction: column; gap: 10px; }}
+  .key-item {{ display: flex; flex-direction: column; gap: 2px; }}
+  .key-label {{ font-size: 11px; font-weight: 600; text-transform: uppercase; }}
+  .key-item ul {{ margin: 2px 0 0; padding-left: 14px; font-size: 10px; color: var(--muted); }}
+  .key-caveat {{ font-size: 9px; color: var(--faint); margin: 4px 0 0; }}
+
+  @media (max-width: 720px) {{
+    .layout {{ flex-direction: column; }}
+    .rail {{ width: auto; border-right: none; border-bottom: 1px solid var(--border); }}
+    .panels-row, .groups-row {{ flex-direction: column; }}
+    .key-panel {{ width: auto; }}
+  }}
 </style>
 </head>
 <body>
 <div class="viz-root">
-<div class="viz-inner">
-  <header>
-    <h1>AI Chatbot Evaluation Dashboard</h1>
-    <button id="theme-toggle" type="button">Toggle theme</button>
-  </header>
+<div class="layout">
+  <div class="rail">
+    <div class="live-line"><span class="live-dot"></span><span id="run-label-rail">live</span></div>
 
-  <div class="hero-row">
     <div>
-      <div class="hero-figure">{pct}%</div>
-      <div class="hero-sub">concern &middot; {results['flagged_count']}/{results['num_questions']} flagged</div>
+      <span class="section-label">[CONFIG]</span>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
+        <div class="rail-field">
+          <span class="rail-field-label">model_endpoint</span>
+          <div class="rail-box">{html.escape(results['target_model'])}</div>
+        </div>
+        <div class="rail-field">
+          <span class="rail-field-label">corpus</span>
+          <div class="rail-box dashed" title="{html.escape(', '.join(corpus_files))}">{corpus_summary} &middot; edit corpus/*.md</div>
+        </div>
+        <div class="rail-field">
+          <span class="rail-field-label">questions</span>
+          <div class="rail-box dashed">{results['num_questions']} configured &middot; edit questions/*.json</div>
+        </div>
+        <button id="run-eval-btn" class="run-eval-btn" type="button">RUN_EVAL</button>
+        <div id="run-eval-error" class="run-eval-error"></div>
+      </div>
     </div>
-    <div class="kpi-row">{stat_tiles}</div>
+
+    <hr class="rail-divider">
+
+    <div>
+      <span class="section-label">[METADATA]</span>
+      <div class="meta-row"><span>total runs</span><span class="meta-value">{len(runs)}</span></div>
+      <div class="meta-row"><span>questions/run</span><span class="meta-value">{results['num_questions']}</span></div>
+      <div class="meta-row"><span>judge</span></div>
+      <div style="font-size:9px;color:var(--faint);margin-top:2px;">{html.escape(results['judge_model'])}</div>
+    </div>
   </div>
 
-  <div class="hero-sub" style="margin: -20px 0 24px;">
-    target model: <b>{html.escape(results['target_model'])}</b> &middot;
-    judged by: {html.escape(results['judge_model'])} &middot;
-    run: {html.escape(results.get('timestamp', 'unknown'))}
+  <div class="main">
+    <div class="header-strip">
+      <span id="run-label-header"></span>
+      <button id="theme-toggle" type="button"><span class="dim" id="theme-dark-label">[DARK]</span><span id="theme-light-label">[LIGHT]</span></button>
+    </div>
+
+    <div class="panels-row">
+      <div class="score-panel">
+        <span class="section-label">[TRUTHFULNESS] (T)</span>
+        <div class="score-figure"><span class="num" id="truth-num"></span><span class="of100">/ 100</span></div>
+        <div class="score-bar-track"><div class="score-bar-fill" id="truth-bar"></div></div>
+        <span class="meaning-trigger">what does this mean?</span>
+        <div class="meaning-popup">{truth_bullets_html}</div>
+      </div>
+      <div class="score-panel">
+        <span class="section-label">[TONE / PHRASING CONSISTENCY] (C)</span>
+        <div class="score-figure"><span class="num" id="tone-num"></span><span class="of100">/ 100</span></div>
+        <div class="score-bar-track"><div class="score-bar-fill" id="tone-bar"></div></div>
+        <span class="meaning-trigger">what does this mean?</span>
+        <div class="meaning-popup">{tone_bullets_html}</div>
+      </div>
+    </div>
+
+    <section class="trend-box">
+      <span class="section-label">[TREND_OVER_TIME] click a run to see more detail</span>
+      {_trend_chart_svg(runs)}
+    </section>
+
+    <section class="groups-row">
+      <div class="groups-col" id="groups-col"></div>
+      {_key_panel_html()}
+    </section>
   </div>
-
-  {_key_html()}
-
-  <section class="attention-section">
-    <h2>Needs attention</h2>
-    {_attention_feed_html(results['questions'])}
-  </section>
-
-  <section class="trend-section">
-    <h2>Trend{' (' + str(len(runs)) + ' comparable runs)' if len(runs) >= 2 else ''}</h2>
-    {_trend_chart_html(runs)}
-  </section>
-
-  <section class="questions-section">
-    <h2>Questions</h2>
-    {rows}
-  </section>
-
-  <script>
-    // raw results, for programmatic access / future charting
-    window.__EVAL_RESULTS__ = {json.dumps(results)};
-    (function() {{
-      const btn = document.getElementById('theme-toggle');
-      const root = document.documentElement;
-      const osPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      btn.addEventListener('click', function() {{
-        const explicit = root.getAttribute('data-theme');
-        // effective theme = explicit override, or the OS preference if none set yet
-        const effectiveIsDark = explicit ? explicit === 'dark' : osPrefersDark;
-        root.setAttribute('data-theme', effectiveIsDark ? 'light' : 'dark');
-      }});
-    }})();
-    (function() {{
-      // "Needs attention" links jump to a <details> row -- native anchor
-      // navigation scrolls to it but won't open a closed <details>, so open
-      // it manually and scroll smoothly instead of an instant jump.
-      function openTarget() {{
-        const id = decodeURIComponent(location.hash.slice(1));
-        if (!id) return;
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.open = true;
-        el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-      }}
-      window.addEventListener('hashchange', openTarget);
-      if (location.hash) openTarget();
-    }})();
-  </script>
 </div>
+
+<script>
+  window.__RUNS__ = {runs_json};
+  window.__SEVERITY_LABEL__ = {json.dumps(_SEVERITY_LABEL)};
+  window.__SEVERITY_CLASS__ = {json.dumps(_SEVERITY_CLASS)};
+
+  (function() {{
+    function escapeHtml(s) {{
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }}
+    function statusFor(score) {{
+      return score >= 85 ? 'good' : (score >= 70 ? 'warning' : 'critical');
+    }}
+    function statusVar(status) {{
+      return status === 'good' ? 'var(--good)' : (status === 'warning' ? 'var(--warning)' : 'var(--bad)');
+    }}
+
+    let selectedRun = window.__RUNS__.length - 1;
+
+    function renderNliRow(s) {{
+      const label = s.label;
+      const status = label === 'entailment' ? 'good' : (label === 'contradiction' ? 'critical' : 'warning');
+      const segs = ['entailment', 'neutral', 'contradiction'].map(function(k) {{
+        return '<div class="nli-seg ' + k + '" style="width:' + ((s[k] || 0) * 100).toFixed(0) + '%"></div>';
+      }}).join('');
+      return '<div class="nli-row">' +
+        '<div class="nli-sentence">' + escapeHtml(s.sentence) + '</div>' +
+        '<div class="nli-bar">' + segs + '</div>' +
+        '<div class="nli-label status-' + status + '">' + label + ' ' + ((s[label] || 0) * 100).toFixed(0) + '%</div>' +
+        '</div>';
+    }}
+
+    function renderQuestionDetail(q) {{
+      const ev = q.evidence || {{}};
+      const numeric = ev.numeric || {{}};
+      const perSentence = ev.nli_per_sentence || [];
+      let html = '<div class="q-detail">';
+      html += '<div class="q-verdict">' + escapeHtml(q.reason) + '</div>';
+
+      if (numeric.mismatches && numeric.mismatches.length) {{
+        numeric.mismatches.forEach(function(m) {{
+          html += '<div class="numeric-readout">' +
+            '<div class="numeric-box answer"><span class="k">answer:</span> ' + escapeHtml(m.answer_value) + ' (' + escapeHtml(m.kind) + ')</div>' +
+            '<div class="numeric-box reference"><span class="k">reference:</span> ' + escapeHtml(JSON.stringify(m.reference_values)) + '</div>' +
+            '</div>';
+        }});
+      }}
+
+      if (perSentence.length) {{
+        html += '<div class="nli-block">' + perSentence.map(renderNliRow).join('') + '</div>';
+      }}
+
+      html += '<details class="full-answers-toggle"><summary>show full answers</summary>' +
+        '<p>ungrounded answer (no reference given):</p><pre>' + escapeHtml(q.ungrounded_answer) + '</pre>' +
+        '<p>grounded answer (reference injected):</p><pre>' + escapeHtml(q.grounded_answer) + '</pre>' +
+        '<p>reference context used:</p><pre>' + escapeHtml(q.reference_context || '(none found)') + '</pre>' +
+        '</details>';
+
+      html += '</div>';
+      return html;
+    }}
+
+    function renderGroups(questions) {{
+      const groups = {{ flag: [], minor: [], none: [] }};
+      questions.forEach(function(q) {{
+        const sev = q.severity || (q.concern ? 'flag' : 'none');
+        (groups[sev] || groups.flag).push(q);
+      }});
+
+      const order = ['flag', 'minor', 'none'];
+      const defaultOpen = {{ flag: true, minor: true, none: false }};
+      let out = '';
+      order.forEach(function(sev) {{
+        const label = window.__SEVERITY_LABEL__[sev];
+        const cls = window.__SEVERITY_CLASS__[sev];
+        const qs = groups[sev];
+        out += '<details class="sev-group status-' + cls + '"' + (defaultOpen[sev] ? ' open' : '') + '>';
+        out += '<summary>' + label + ' (' + qs.length + ')</summary>';
+        out += '<div class="sev-group-body">';
+        if (!qs.length) {{
+          out += '<div class="sev-empty">none this run</div>';
+        }} else if (sev === 'none') {{
+          qs.forEach(function(q) {{
+            out += '<div class="q-row-ok"><span class="qtext">' + escapeHtml(q.question) + '</span>' +
+              '<span class="qscores">T ' + q.truthfulness_score + ' &middot; C ' + q.tone_consistency_score + '</span></div>';
+          }});
+        }} else {{
+          qs.forEach(function(q) {{
+            out += '<details class="q-row status-' + cls + '" name="qrow">';
+            out += '<summary><span class="qtext">' + escapeHtml(q.question) + '</span>' +
+              '<span class="qscores">T ' + q.truthfulness_score + ' &middot; C ' + q.tone_consistency_score + '</span></summary>';
+            out += renderQuestionDetail(q);
+            out += '</details>';
+          }});
+        }}
+        out += '</div></details>';
+      }});
+      return out;
+    }}
+
+    window.renderRun = function(idx) {{
+      selectedRun = idx;
+      const run = window.__RUNS__[idx];
+
+      document.getElementById('run-label-header').textContent =
+        (run.target_model || '') + '.eval \\u2014 ' + (run.timestamp || '').slice(0, 10);
+      document.getElementById('run-label-rail').textContent = 'live \\u00b7 ' + (run.timestamp || '').slice(0, 10);
+
+      const truthStatus = statusFor(run.avg_truthfulness_score);
+      document.getElementById('truth-num').textContent = run.avg_truthfulness_score;
+      document.getElementById('truth-num').style.color = statusVar(truthStatus);
+      document.getElementById('truth-bar').style.width = run.avg_truthfulness_score + '%';
+      document.getElementById('truth-bar').style.background = statusVar(truthStatus);
+
+      const toneStatus = statusFor(run.avg_tone_consistency_score);
+      document.getElementById('tone-num').textContent = run.avg_tone_consistency_score;
+      document.getElementById('tone-num').style.color = statusVar(toneStatus);
+      document.getElementById('tone-bar').style.width = run.avg_tone_consistency_score + '%';
+      document.getElementById('tone-bar').style.background = statusVar(toneStatus);
+
+      document.getElementById('groups-col').innerHTML = renderGroups(run.questions);
+
+      const svg = document.getElementById('trend-svg');
+      if (svg) {{
+        svg.querySelectorAll('.trend-dot').forEach(function(d) {{
+          d.classList.toggle('selected', parseInt(d.getAttribute('data-run'), 10) === idx);
+        }});
+        const guideX = JSON.parse(svg.getAttribute('data-guide-x'));
+        const guide = document.getElementById('trend-guide');
+        if (guide && guideX[idx] !== undefined) {{
+          guide.setAttribute('x1', guideX[idx]);
+          guide.setAttribute('x2', guideX[idx]);
+        }}
+      }}
+    }};
+
+    window.selectRun = function(idx) {{ window.renderRun(idx); }};
+
+    renderRun(selectedRun);
+  }})();
+
+  (function() {{
+    const btn = document.getElementById('theme-toggle');
+    const root = document.documentElement;
+    const darkLabel = document.getElementById('theme-dark-label');
+    const lightLabel = document.getElementById('theme-light-label');
+    function apply(theme) {{
+      root.setAttribute('data-theme', theme);
+      darkLabel.classList.toggle('dim', theme !== 'dark');
+      lightLabel.classList.toggle('dim', theme !== 'light');
+    }}
+    const saved = localStorage.getItem('theme');
+    const osPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    apply(saved || (osPrefersDark ? 'dark' : 'light'));
+    btn.addEventListener('click', function() {{
+      const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      apply(next);
+      localStorage.setItem('theme', next);
+    }});
+  }})();
+
+  (function() {{
+    const btn = document.getElementById('run-eval-btn');
+    const errEl = document.getElementById('run-eval-error');
+    btn.addEventListener('click', function() {{
+      btn.disabled = true;
+      btn.textContent = 'RUNNING...';
+      errEl.style.display = 'none';
+      fetch('/run', {{ method: 'POST' }})
+        .then(function(r) {{ return r.json().then(function(data) {{ return {{ ok: r.ok, data: data }}; }}); }})
+        .then(function(res) {{
+          if (res.ok && res.data.ok) {{
+            window.location.reload();
+          }} else {{
+            throw new Error(res.data.error || 'run failed');
+          }}
+        }})
+        .catch(function(e) {{
+          btn.disabled = false;
+          btn.textContent = 'RUN_EVAL';
+          errEl.textContent = String(e.message || e);
+          errEl.style.display = 'block';
+        }});
+    }});
+  }})();
+</script>
 </div>
 </body>
 </html>

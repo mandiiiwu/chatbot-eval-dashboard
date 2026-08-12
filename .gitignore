@@ -19,3 +19,4 @@ corpus/.claude/
 # Leftover from an unrelated tool pointed at this directory -- not part of
 # this project, see PLAN.md/memory for context.
 corpus/.serena/
+.serena/
