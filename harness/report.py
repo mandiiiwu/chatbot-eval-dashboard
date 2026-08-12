@@ -61,7 +61,11 @@ _KEY_ITEMS = [
         "and no numeric mismatch",
     ]),
 ]
-_KEY_CAVEAT = "not 100% reliable -- NLI can misread hedging as contradiction"
+_KEY_CAVEATS = [
+    "not 100% reliable -- NLI can misread hedging as contradiction",
+    "doesn't penalize incomplete answers -- only checks whether what's present "
+    "contradicts the reference, not whether the answer covers everything asked",
+]
 
 
 def _corpus_files() -> list[str]:
@@ -157,7 +161,7 @@ def _key_panel_html() -> str:
     <div class="key-panel">
       <span class="section-label">[KEY]</span>
       {items}
-      <p class="key-caveat">{html.escape(_KEY_CAVEAT)}</p>
+      {"".join(f'<p class="key-caveat">{html.escape(c)}</p>' for c in _KEY_CAVEATS)}
     </div>
     """
 
@@ -219,7 +223,7 @@ def render_html(results: dict) -> str:
   .layout {{ display: flex; align-items: stretch; min-height: 100vh; }}
 
   /* --- left rail --- */
-  .rail {{ width: 200px; flex-shrink: 0; border-right: 1px solid var(--border);
+  .rail {{ width: 240px; flex-shrink: 0; border-right: 1px solid var(--border);
           padding: 18px 16px; display: flex; flex-direction: column; gap: 14px; }}
   .live-line {{ display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }}
   .live-dot {{ width: 6px; height: 6px; border-radius: 50%; background: var(--good); flex-shrink: 0; }}
@@ -239,7 +243,7 @@ def render_html(results: dict) -> str:
   /* --- main content --- */
   .main {{ flex: 1; min-width: 0; padding: 16px 24px 40px; }}
   .header-strip {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }}
-  #run-label-header {{ font-size: 12px; color: var(--muted); }}
+  #run-label-header {{ font-size: 15px; color: var(--muted); }}
   #theme-toggle {{ display: flex; gap: 6px; border: 1px solid var(--border); background: transparent;
                    color: var(--text); cursor: pointer; font: 11px 'IBM Plex Mono'; padding: 5px 10px; }}
   #theme-toggle .dim {{ opacity: 0.35; }}
@@ -254,7 +258,7 @@ def render_html(results: dict) -> str:
   .score-bar-fill {{ height: 100%; }}
   .meaning-trigger {{ font-size: 10px; color: var(--muted); text-decoration: underline dotted; cursor: help;
                       width: fit-content; }}
-  .meaning-popup {{ display: none; position: absolute; left: 0; right: 0; bottom: 0; background: var(--bg);
+  .meaning-popup {{ display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 6px; background: var(--bg);
                     border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,0.3); padding: 12px 14px;
                     font-size: 10px; color: var(--muted); flex-direction: column; gap: 4px; z-index: 5; }}
   .meaning-popup span:before {{ content: "\\2022  "; color: var(--muted); }}
@@ -302,15 +306,13 @@ def render_html(results: dict) -> str:
   .q-row {{ border: 1px solid var(--border); padding: 8px 10px; font-size: 11px; }}
   .q-row.status-critical {{ border-color: var(--bad); }}
   .q-row.status-warning {{ border-color: var(--warning); }}
+  .q-row.status-good {{ border-color: var(--good); }}
   .q-row summary {{ cursor: pointer; display: flex; justify-content: space-between; gap: 10px; list-style: none; }}
   .q-row summary::-webkit-details-marker {{ display: none; }}
   .q-row .qtext {{ flex: 1; }}
   .q-row .qscores {{ color: var(--muted); flex-shrink: 0; }}
-  .q-row-ok {{ display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px;
-              border: 1px solid var(--border); font-size: 11px; }}
-  .q-row-ok .qtext {{ flex: 1; }}
-  .q-row-ok .qscores {{ color: var(--muted); }}
   .q-detail {{ margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }}
+  .q-question {{ color: var(--text); font-weight: 600; }}
   .q-verdict {{ color: var(--muted); }}
   .numeric-readout {{ display: flex; gap: 8px; }}
   .numeric-box {{ flex: 1; border: 1px solid var(--border); padding: 6px 8px; font-size: 10px; }}
@@ -337,6 +339,9 @@ def render_html(results: dict) -> str:
                display: flex; flex-direction: column; gap: 10px; }}
   .key-item {{ display: flex; flex-direction: column; gap: 2px; }}
   .key-label {{ font-size: 11px; font-weight: 600; text-transform: uppercase; }}
+  .key-label.status-critical {{ color: var(--bad); }}
+  .key-label.status-warning {{ color: var(--warning); }}
+  .key-label.status-good {{ color: var(--good); }}
   .key-item ul {{ margin: 2px 0 0; padding-left: 14px; font-size: 10px; color: var(--muted); }}
   .key-caveat {{ font-size: 9px; color: var(--faint); margin: 4px 0 0; }}
 
@@ -409,7 +414,7 @@ def render_html(results: dict) -> str:
     </div>
 
     <section class="trend-box">
-      <span class="section-label">[TREND_OVER_TIME] click a run to see more detail</span>
+      <span class="section-label">[TREND OVER TIME] click a run to see more detail</span>
       {_trend_chart_svg(runs)}
     </section>
 
@@ -437,6 +442,10 @@ def render_html(results: dict) -> str:
     function statusVar(status) {{
       return status === 'good' ? 'var(--good)' : (status === 'warning' ? 'var(--warning)' : 'var(--bad)');
     }}
+    function categoryLabel(id) {{
+      const m = /^(.*)-(\\d+)$/.exec(id || '');
+      return m ? (m[1] + ' v' + m[2]) : (id || '');
+    }}
 
     let selectedRun = window.__RUNS__.length - 1;
 
@@ -458,6 +467,7 @@ def render_html(results: dict) -> str:
       const numeric = ev.numeric || {{}};
       const perSentence = ev.nli_per_sentence || [];
       let html = '<div class="q-detail">';
+      html += '<div class="q-question">' + escapeHtml(q.question) + '</div>';
       html += '<div class="q-verdict">' + escapeHtml(q.reason) + '</div>';
 
       if (numeric.mismatches && numeric.mismatches.length) {{
@@ -502,15 +512,10 @@ def render_html(results: dict) -> str:
         out += '<div class="sev-group-body">';
         if (!qs.length) {{
           out += '<div class="sev-empty">none this run</div>';
-        }} else if (sev === 'none') {{
-          qs.forEach(function(q) {{
-            out += '<div class="q-row-ok"><span class="qtext">' + escapeHtml(q.question) + '</span>' +
-              '<span class="qscores">T ' + q.truthfulness_score + ' &middot; C ' + q.tone_consistency_score + '</span></div>';
-          }});
         }} else {{
           qs.forEach(function(q) {{
             out += '<details class="q-row status-' + cls + '" name="qrow">';
-            out += '<summary><span class="qtext">' + escapeHtml(q.question) + '</span>' +
+            out += '<summary><span class="qtext">' + escapeHtml(categoryLabel(q.id)) + '</span>' +
               '<span class="qscores">T ' + q.truthfulness_score + ' &middot; C ' + q.tone_consistency_score + '</span></summary>';
             out += renderQuestionDetail(q);
             out += '</details>';
