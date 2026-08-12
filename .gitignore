@@ -1,0 +1,21 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+results/*.json
+results/*.html
+results/*.log
+!results/.gitkeep
+.DS_Store
+
+# internal planning/reference docs -- not part of the public release
+PLAN.md
+README_example.md
+
+# Local Claude Code tool state -- machine-specific, never shared
+.claude/
+corpus/.claude/
+
+# Leftover from an unrelated tool pointed at this directory -- not part of
+# this project, see PLAN.md/memory for context.
+corpus/.serena/

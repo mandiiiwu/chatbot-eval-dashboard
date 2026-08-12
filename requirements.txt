@@ -1,0 +1,20 @@
+requests
+python-dotenv
+
+# Real semantic retrieval + tone-consistency scoring (harness/embeddings.py,
+# harness/retrieval.py, harness/evaluator.py) -- MicroDC's async job queue,
+# via their official client (not on PyPI, installed from GitLab). See
+# PLAN.md Phase 5.
+git+https://gitlab.com/microdc/python-client.git
+
+# Local fact-checking (harness/fact_check.py) -- replaces the old MicroDC
+# LLM-as-judge call. See PLAN.md Phase 4.
+transformers
+torch
+
+# NOT installed: scispacy (planned for entity extraction alongside the
+# regex numeric checks in fact_check.py). Its dependency chain (spaCy ->
+# thinc -> blis) has no prebuilt wheels for Python 3.14 yet and fails to
+# compile from source. fact_check.py works without it (numeric extraction +
+# NLI classifier only) -- revisit if entity-level checking proves needed,
+# e.g. by running under an older Python.
