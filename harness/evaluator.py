@@ -21,7 +21,7 @@ import os
 from datetime import datetime, timezone
 
 from . import alerting, config, coverage_check, embeddings, fact_check, report, retrieval
-from .ollama_client import chat as target_chat
+from .target_client import chat as target_chat
 
 
 def _tone_consistency(answers: list[str]) -> float:

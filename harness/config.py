@@ -21,6 +21,38 @@ MDC_API_KEY = os.environ.get("MDC_API_KEY", "")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 TARGET_MODEL = os.environ.get("TARGET_MODEL", "")
 
+# V2-G: lets the harness point at essentially any REST/JSON chatbot API, not
+# just OpenAI-compatible ones. Deliberately a generic templated HTTP client
+# (harness/custom_client.py) rather than a provider registry (HF/AWS/Azure/
+# etc. special-casing) -- a homegrown one-off API won't match any specific
+# vendor's shape anyway, and that's the realistic majority case for "a
+# specific-purpose chatbot that isn't already OpenAI-compatible." gRPC
+# explicitly out of scope, no evidence of a real need (see PLAN.md's V2-G).
+#
+# TARGET_PROVIDER: "ollama" (default) or "custom". When "custom":
+#   CUSTOM_ENDPOINT_URL      -- the API to POST to
+#   CUSTOM_ENDPOINT_HEADERS  -- JSON object string, e.g. for auth
+#   CUSTOM_REQUEST_TEMPLATE  -- JSON string; {{model}}/{{system}}/{{message}}
+#                               get substituted in before sending
+#   CUSTOM_RESPONSE_PATH     -- dot-notation path to the answer text in the
+#                               JSON response, e.g. "choices.0.message.content"
+# See .env.example for a worked example.
+TARGET_PROVIDER = os.environ.get("TARGET_PROVIDER", "ollama")
+CUSTOM_ENDPOINT_URL = os.environ.get("CUSTOM_ENDPOINT_URL", "")
+CUSTOM_ENDPOINT_HEADERS = os.environ.get("CUSTOM_ENDPOINT_HEADERS", "{}")
+CUSTOM_REQUEST_TEMPLATE = os.environ.get("CUSTOM_REQUEST_TEMPLATE", '{"prompt": "{{message}}"}')
+CUSTOM_RESPONSE_PATH = os.environ.get("CUSTOM_RESPONSE_PATH", "response")
+
+
+def require_custom_endpoint() -> str:
+    if not CUSTOM_ENDPOINT_URL:
+        raise SystemExit(
+            "TARGET_PROVIDER=custom but CUSTOM_ENDPOINT_URL is not set. See "
+            ".env.example for the custom-endpoint config format (URL, headers, "
+            "request template, response path)."
+        )
+    return CUSTOM_ENDPOINT_URL
+
 # V2-I: generates candidate questions/paraphrase-variants from the corpus
 # (harness/question_gen.py). Stays on MicroDC, deliberately a different
 # model family than the target -- the same "don't let a model grade/design
