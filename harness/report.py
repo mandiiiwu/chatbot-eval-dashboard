@@ -235,6 +235,14 @@ def render_html(results: dict) -> str:
   .section-label {{ font-size: 12px; color: var(--muted); font-weight: 600; }}
   .rail-field {{ display: flex; flex-direction: column; gap: 4px; }}
   .rail-field-label {{ font-size: 10px; color: var(--muted); }}
+  .field-help {{ position: relative; display: inline-flex; align-items: center; justify-content: center;
+                margin-left: 4px; cursor: help; color: var(--muted); border: 1px solid var(--border);
+                border-radius: 50%; width: 12px; height: 12px; font-size: 9px; line-height: 1; }}
+  .field-help-popup {{ display: none; position: absolute; top: 100%; left: 0; margin-top: 6px; width: 190px;
+                       background: var(--bg); border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+                       padding: 8px 10px; font-size: 10px; color: var(--muted); line-height: 1.5; z-index: 10;
+                       text-transform: none; }}
+  .field-help:hover .field-help-popup {{ display: block; }}
   .rail-box {{ border: 1px solid var(--border); padding: 8px 10px; font-size: 11px; word-break: break-word; }}
   .rail-box.dashed {{ border-style: dashed; color: var(--muted); }}
   .rail-input {{ border: 1px solid var(--border); background: var(--bg); color: var(--text);
@@ -383,11 +391,11 @@ def render_html(results: dict) -> str:
       <span class="section-label">[CONFIG]</span>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
         <div class="rail-field">
-          <span class="rail-field-label">model_endpoint</span>
+          <span class="rail-field-label">model_endpoint<span class="field-help">?<span class="field-help-popup">Must match an Ollama-pulled model tag exactly &mdash; run <code>ollama list</code> in your terminal to see what's available locally. Needs to be reachable via the OpenAI-compatible endpoint at OLLAMA_BASE_URL. Changing this only affects your next run, it doesn't edit .env.</span></span></span>
           <input id="model-endpoint-input" class="rail-input" type="text" value="{html.escape(results['target_model'])}" spellcheck="false">
         </div>
         <div class="rail-field">
-          <span class="rail-field-label">corpus ({corpus_summary})</span>
+          <span class="rail-field-label">corpus ({corpus_summary})<span class="field-help">?<span class="field-help-popup">Upload real, verbatim reference text (.md or .txt) &mdash; not AI-generated or paraphrased content. Include citation/license info if it isn't your own writing. One coherent topic per file works best for retrieval.</span></span></span>
           <div id="corpus-list" class="corpus-list">
             {"".join(
                 f'<div class="corpus-item"><span class="corpus-fname" title="{html.escape(f)}">{html.escape(f)}</span>'
@@ -418,6 +426,14 @@ def render_html(results: dict) -> str:
       <div class="meta-row"><span>questions/run</span><span class="meta-value">{results['num_questions']}</span></div>
       <div class="meta-row"><span>judge</span></div>
       <div style="font-size:9px;color:var(--faint);margin-top:2px;">{html.escape(results['judge_model'])}</div>
+    </div>
+
+    <hr class="rail-divider">
+
+    <div>
+      <span class="section-label">[EXPORT]</span>
+      <button id="save-json-btn" class="run-eval-btn" type="button" style="margin-top:10px;">SAVE_DATA_AS_JSON</button>
+      <div style="font-size:9px;color:var(--faint);margin-top:6px;">downloads every comparable run currently loaded on this page &mdash; for feeding to another LLM or tool</div>
     </div>
   </div>
 
@@ -460,6 +476,20 @@ def render_html(results: dict) -> str:
   window.__RUNS__ = {runs_json};
   window.__SEVERITY_LABEL__ = {json.dumps(_SEVERITY_LABEL)};
   window.__SEVERITY_CLASS__ = {json.dumps(_SEVERITY_CLASS)};
+
+  (function() {{
+    document.getElementById('save-json-btn').addEventListener('click', function() {{
+      const blob = new Blob([JSON.stringify(window.__RUNS__, null, 2)], {{ type: 'application/json' }});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'chatbot_eval_runs_' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }});
+  }})();
 
   (function() {{
     function escapeHtml(s) {{
