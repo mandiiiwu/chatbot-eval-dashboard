@@ -3,21 +3,57 @@ Regenerates the report fresh from current results/ state on every request to
 `/`, so visiting localhost always shows the latest data -- no manual re-run or
 file-reopening step, no build tooling, no framework.
 
-Also serves POST /run, which triggers a real eval run (harness.evaluator.
-run_and_save -- the same function run_eval.py's CLI uses) so the dashboard's
-RUN_EVAL button works for real instead of being a non-functional mock. This
-is a local, single-user tool, so a synchronous blocking POST is the right
-level of complexity -- no job queue, no websockets, no polling."""
+Also serves:
+  - POST /run -- triggers a real eval run (harness.evaluator.run_and_save --
+    the same function run_eval.py's CLI uses), optionally overriding
+    target_model for this run only. Local, single-user tool, so a
+    synchronous blocking POST is the right level of complexity -- no job
+    queue, no websockets, no polling.
+  - POST /corpus/upload, POST /corpus/delete -- lets the dashboard's corpus
+    section actually add/remove corpus/*.md files instead of being a
+    read-only display. Corpus files are always plain text, so uploads are
+    JSON {filename, content}, not multipart form data -- Python 3.13+
+    dropped the stdlib cgi module that used to make multipart parsing easy,
+    and text-only content sidesteps needing it at all.
+"""
 
 import http.server
 import json
 import os
 import socketserver
 
-from . import config, report
+from . import config, report, retrieval
 from .evaluator import run_and_save
 
 PORT = int(os.environ.get("DASHBOARD_PORT", "8765"))
+
+_CORPUS_EXTENSIONS = (".md", ".txt")
+
+
+class CorpusPathError(ValueError):
+    pass
+
+
+def _safe_corpus_path(filename: str) -> str:
+    """Validates filename and returns its absolute path inside
+    config.CORPUS_DIR. Rejects anything that could escape the corpus
+    directory (path separators, "..", absolute paths) -- a filename here
+    comes straight from a browser request, and blindly os.path.join-ing
+    user input is a classic path-traversal hole even on a single-user
+    localhost tool. Also requires a .md/.txt extension, matching what
+    retrieval.py already treats as corpus content."""
+    if not filename or "/" in filename or "\\" in filename or filename in (".", ".."):
+        raise CorpusPathError(f"invalid filename: {filename!r}")
+    if not filename.lower().endswith(_CORPUS_EXTENSIONS):
+        raise CorpusPathError(f"filename must end in .md or .txt: {filename!r}")
+    path = os.path.join(config.CORPUS_DIR, filename)
+    # Defense in depth: even after the checks above, confirm the resolved
+    # real path is still actually inside CORPUS_DIR before touching disk.
+    corpus_real = os.path.realpath(config.CORPUS_DIR)
+    path_real = os.path.realpath(path)
+    if os.path.commonpath([corpus_real, path_real]) != corpus_real:
+        raise CorpusPathError(f"filename escapes corpus/: {filename!r}")
+    return path
 
 
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
@@ -38,8 +74,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/run":
+            body = self._read_json_body()
+            target_model = (body or {}).get("target_model") or None
             try:
-                run_and_save()
+                run_and_save(target_model=target_model)
                 self._send_json({"ok": True}, 200)
             except SystemExit as e:
                 # coverage_check.require_coverage() hard-blocks via SystemExit
@@ -50,7 +88,50 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
+
+        if self.path == "/corpus/upload":
+            body = self._read_json_body() or {}
+            try:
+                path = _safe_corpus_path(body.get("filename", ""))
+                content = body.get("content", "")
+                if not content.strip():
+                    raise CorpusPathError("file is empty")
+                with open(path, "w") as f:
+                    f.write(content)
+                retrieval._chunk_embeddings.cache_clear()  # corpus changed, stale embeddings must go
+                self._send_json({"ok": True}, 200)
+            except CorpusPathError as e:
+                self._send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/corpus/delete":
+            body = self._read_json_body() or {}
+            try:
+                path = _safe_corpus_path(body.get("filename", ""))
+                if not os.path.exists(path):
+                    raise CorpusPathError(f"no such corpus file: {body.get('filename')!r}")
+                os.remove(path)
+                retrieval._chunk_embeddings.cache_clear()
+                self._send_json({"ok": True}, 200)
+            except CorpusPathError as e:
+                self._send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         self.send_error(404)
+
+    def _read_json_body(self) -> dict | None:
+        length = int(self.headers.get("Content-Length", 0))
+        if not length:
+            return None
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
 
     def _send_html(self, body: str, status: int) -> None:
         encoded = body.encode("utf-8")

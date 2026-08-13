@@ -237,6 +237,18 @@ def render_html(results: dict) -> str:
   .rail-field-label {{ font-size: 10px; color: var(--muted); }}
   .rail-box {{ border: 1px solid var(--border); padding: 8px 10px; font-size: 11px; word-break: break-word; }}
   .rail-box.dashed {{ border-style: dashed; color: var(--muted); }}
+  .rail-input {{ border: 1px solid var(--border); background: var(--bg); color: var(--text);
+                padding: 8px 10px; font: 11px 'IBM Plex Mono'; width: 100%; }}
+  .corpus-list {{ display: flex; flex-direction: column; gap: 4px; }}
+  .corpus-item {{ display: flex; align-items: center; justify-content: space-between; gap: 6px;
+                  border: 1px solid var(--border); padding: 5px 8px; font-size: 10px; }}
+  .corpus-fname {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .corpus-delete {{ border: none; background: transparent; color: var(--bad); cursor: pointer;
+                    font-size: 13px; line-height: 1; flex-shrink: 0; padding: 0 2px; }}
+  .corpus-upload {{ display: flex; gap: 6px; align-items: center; margin-top: 2px; }}
+  .corpus-upload input[type="file"] {{ flex: 1; min-width: 0; font-size: 9px; color: var(--muted); }}
+  .corpus-upload button {{ border: 1px solid var(--border); background: transparent; color: var(--text);
+                           font: 10px 'IBM Plex Mono'; padding: 5px 8px; cursor: pointer; flex-shrink: 0; }}
   .run-eval-btn {{ margin-top: 2px; padding: 10px; border: 1px solid var(--text); background: var(--text);
                    color: var(--bg); font: 600 11px 'IBM Plex Mono'; cursor: pointer; }}
   .run-eval-btn:disabled {{ opacity: 0.5; cursor: default; }}
@@ -372,11 +384,22 @@ def render_html(results: dict) -> str:
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
         <div class="rail-field">
           <span class="rail-field-label">model_endpoint</span>
-          <div class="rail-box">{html.escape(results['target_model'])}</div>
+          <input id="model-endpoint-input" class="rail-input" type="text" value="{html.escape(results['target_model'])}" spellcheck="false">
         </div>
         <div class="rail-field">
-          <span class="rail-field-label">corpus</span>
-          <div class="rail-box dashed" title="{html.escape(', '.join(corpus_files))}">{corpus_summary} &middot; edit corpus/*.md</div>
+          <span class="rail-field-label">corpus ({corpus_summary})</span>
+          <div id="corpus-list" class="corpus-list">
+            {"".join(
+                f'<div class="corpus-item"><span class="corpus-fname" title="{html.escape(f)}">{html.escape(f)}</span>'
+                f'<button type="button" class="corpus-delete" data-filename="{html.escape(f)}" title="delete">&times;</button></div>'
+                for f in corpus_files
+            )}
+          </div>
+          <div class="corpus-upload">
+            <input id="corpus-file-input" type="file" accept=".md,.txt">
+            <button id="corpus-upload-btn" type="button">add file</button>
+          </div>
+          <div id="corpus-error" class="run-eval-error"></div>
         </div>
         <div class="rail-field">
           <span class="rail-field-label">questions</span>
@@ -605,11 +628,16 @@ def render_html(results: dict) -> str:
   (function() {{
     const btn = document.getElementById('run-eval-btn');
     const errEl = document.getElementById('run-eval-error');
+    const modelInput = document.getElementById('model-endpoint-input');
     btn.addEventListener('click', function() {{
       btn.disabled = true;
       btn.textContent = 'RUNNING...';
       errEl.style.display = 'none';
-      fetch('/run', {{ method: 'POST' }})
+      fetch('/run', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ target_model: modelInput.value.trim() }}),
+      }})
         .then(function(r) {{ return r.json().then(function(data) {{ return {{ ok: r.ok, data: data }}; }}); }})
         .then(function(res) {{
           if (res.ok && res.data.ok) {{
@@ -624,6 +652,63 @@ def render_html(results: dict) -> str:
           errEl.textContent = String(e.message || e);
           errEl.style.display = 'block';
         }});
+    }});
+  }})();
+
+  (function() {{
+    const errEl = document.getElementById('corpus-error');
+    function showError(e) {{
+      errEl.textContent = String((e && e.message) || e);
+      errEl.style.display = 'block';
+    }}
+    function postJson(url, payload) {{
+      return fetch(url, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload),
+      }}).then(function(r) {{
+        return r.json().then(function(data) {{
+          if (!r.ok || !data.ok) throw new Error(data.error || 'request failed');
+          return data;
+        }});
+      }});
+    }}
+
+    document.querySelectorAll('.corpus-delete').forEach(function(btn) {{
+      btn.addEventListener('click', function() {{
+        const filename = btn.getAttribute('data-filename');
+        if (!window.confirm('Delete ' + filename + ' from the corpus?')) return;
+        errEl.style.display = 'none';
+        postJson('/corpus/delete', {{ filename: filename }})
+          .then(function() {{ window.location.reload(); }})
+          .catch(showError);
+      }});
+    }});
+
+    const uploadBtn = document.getElementById('corpus-upload-btn');
+    const fileInput = document.getElementById('corpus-file-input');
+    uploadBtn.addEventListener('click', function() {{
+      const file = fileInput.files[0];
+      if (!file) {{ showError('choose a .md or .txt file first'); return; }}
+      errEl.style.display = 'none';
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'uploading...';
+      const reader = new FileReader();
+      reader.onload = function() {{
+        postJson('/corpus/upload', {{ filename: file.name, content: reader.result }})
+          .then(function() {{ window.location.reload(); }})
+          .catch(function(e) {{
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'add file';
+            showError(e);
+          }});
+      }};
+      reader.onerror = function() {{
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = 'add file';
+        showError('could not read file');
+      }};
+      reader.readAsText(file);
     }});
   }})();
 </script>
