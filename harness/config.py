@@ -43,16 +43,6 @@ CUSTOM_ENDPOINT_HEADERS = os.environ.get("CUSTOM_ENDPOINT_HEADERS", "{}")
 CUSTOM_REQUEST_TEMPLATE = os.environ.get("CUSTOM_REQUEST_TEMPLATE", '{"prompt": "{{message}}"}')
 CUSTOM_RESPONSE_PATH = os.environ.get("CUSTOM_RESPONSE_PATH", "response")
 
-
-def require_custom_endpoint() -> str:
-    if not CUSTOM_ENDPOINT_URL:
-        raise SystemExit(
-            "TARGET_PROVIDER=custom but CUSTOM_ENDPOINT_URL is not set. See "
-            ".env.example for the custom-endpoint config format (URL, headers, "
-            "request template, response path)."
-        )
-    return CUSTOM_ENDPOINT_URL
-
 # V2-I: generates candidate questions/paraphrase-variants from the corpus
 # (harness/question_gen.py). Stays on MicroDC, deliberately a different
 # model family than the target -- the same "don't let a model grade/design

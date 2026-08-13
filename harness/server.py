@@ -15,6 +15,9 @@ Also serves:
     JSON {filename, content}, not multipart form data -- Python 3.13+
     dropped the stdlib cgi module that used to make multipart parsing easy,
     and text-only content sidesteps needing it at all.
+  - POST /results/import -- the dashboard's [IMPORT] button. Body is a raw
+    results.json (harness.import_run.save() validates it strictly against
+    the current schema before persisting it, same as a real RUN_EVAL run).
 """
 
 import http.server
@@ -22,7 +25,7 @@ import json
 import os
 import socketserver
 
-from . import config, report, retrieval
+from . import config, import_run, report, retrieval
 from .evaluator import run_and_save
 
 PORT = int(os.environ.get("DASHBOARD_PORT", "8765"))
@@ -74,10 +77,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/run":
-            body = self._read_json_body()
-            target_model = (body or {}).get("target_model") or None
+            body = self._read_json_body() or {}
+            target_model = body.get("target_model") or None
+            endpoint_config = body.get("endpoint_config") or None
             try:
-                run_and_save(target_model=target_model)
+                run_and_save(target_model=target_model, endpoint_config=endpoint_config)
                 self._send_json({"ok": True}, 200)
             except SystemExit as e:
                 # coverage_check.require_coverage() hard-blocks via SystemExit
@@ -101,6 +105,19 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 retrieval._chunk_embeddings.cache_clear()  # corpus changed, stale embeddings must go
                 self._send_json({"ok": True}, 200)
             except CorpusPathError as e:
+                self._send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/results/import":
+            body = self._read_json_body()
+            try:
+                if body is None:
+                    raise import_run.ImportValidationError("request body is empty or not valid JSON")
+                filename = import_run.save(body)
+                self._send_json({"ok": True, "filename": filename}, 200)
+            except import_run.ImportValidationError as e:
                 self._send_json({"ok": False, "error": str(e)}, 400)
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)

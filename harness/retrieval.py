@@ -9,10 +9,33 @@ are ever unavailable (no MDC_API_KEY, network issues, etc).
 """
 
 import functools
+import hashlib
 import os
 import re
 
 from . import config, embeddings
+
+
+def corpus_fingerprint() -> str:
+    """Short hash of the current corpus/ directory's content -- changes
+    automatically whenever a corpus file is added/removed/edited. Stored on
+    every run and used (alongside target_model, schema_version) to filter
+    the trend chart, so swapping in an entirely different corpus (e.g. this
+    project's medical one for a future legal/HR one) can't silently mix
+    incompatible results on the same trend line -- same principle already
+    applied to target_model (V2-C) and schema_version, just for corpus
+    content. No manual "project" setup needed; this is fully automatic."""
+    if not os.path.isdir(config.CORPUS_DIR):
+        return "empty"
+    parts = []
+    for fname in sorted(os.listdir(config.CORPUS_DIR)):
+        if not fname.endswith((".md", ".txt")):
+            continue
+        with open(os.path.join(config.CORPUS_DIR, fname)) as f:
+            parts.append(fname + "\x00" + f.read())
+    if not parts:
+        return "empty"
+    return hashlib.sha256("\x00".join(parts).encode()).hexdigest()[:12]
 
 _STOPWORDS = {
     "the", "a", "an", "is", "are", "was", "were", "be", "been", "of", "in",

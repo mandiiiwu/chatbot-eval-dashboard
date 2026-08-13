@@ -167,12 +167,16 @@ def _key_panel_html() -> str:
 
 
 def render_html(results: dict) -> str:
-    # Filtered to the current run's target_model -- fixes a real bug where
-    # this used to mix different models' scores onto the same trend line,
-    # which is misleading, not just incomplete. Kept independent of the
-    # leaderboard UI (removed 2026-08-13, not a wanted feature) since the
-    # bug it fixes exists regardless of whether there's a comparison view.
-    runs = history.load_comparable_runs(target_model=results["target_model"])
+    # Filtered to the current run's target_model AND corpus_fingerprint --
+    # fixes two real bugs where this used to mix different models', or
+    # different corpora's, scores onto the same trend line, which is
+    # misleading, not just incomplete. Kept independent of the leaderboard
+    # UI (removed 2026-08-13, not a wanted feature) since both bugs exist
+    # regardless of whether there's a comparison view.
+    runs = history.load_comparable_runs(
+        target_model=results["target_model"],
+        corpus_fingerprint=results.get("corpus_fingerprint"),
+    )
     if not runs or runs[-1].get("timestamp") != results.get("timestamp"):
         runs = runs + [results]
 
@@ -395,6 +399,31 @@ def render_html(results: dict) -> str:
           <input id="model-endpoint-input" class="rail-input" type="text" value="{html.escape(results['target_model'])}" spellcheck="false">
         </div>
         <div class="rail-field">
+          <span class="rail-field-label">target_provider<span class="field-help">?<span class="field-help-popup">"ollama" talks to a local Ollama model (default). "custom" lets you point at any REST/JSON chatbot API by describing its request/response shape below. Changing this only affects your next run, it doesn't edit .env.</span></span></span>
+          <select id="target-provider-select" class="rail-input">
+            <option value="ollama" {"selected" if config.TARGET_PROVIDER != "custom" else ""}>ollama (local)</option>
+            <option value="custom" {"selected" if config.TARGET_PROVIDER == "custom" else ""}>custom HTTP endpoint</option>
+          </select>
+        </div>
+        <div id="custom-endpoint-fields" class="rail-field" style="display:{"flex" if config.TARGET_PROVIDER == "custom" else "none"};flex-direction:column;gap:10px;">
+          <div class="rail-field">
+            <span class="rail-field-label">endpoint_url</span>
+            <input id="endpoint-url-input" class="rail-input" type="text" value="{html.escape(config.CUSTOM_ENDPOINT_URL)}" placeholder="https://..." spellcheck="false">
+          </div>
+          <div class="rail-field">
+            <span class="rail-field-label">endpoint_headers<span class="field-help">?<span class="field-help-popup">JSON object, e.g. {{"Authorization": "Bearer ..."}}. Never pre-filled or saved to results/ &mdash; leave blank to use the value already in .env.</span></span></span>
+            <input id="endpoint-headers-input" class="rail-input" type="password" placeholder="leave blank for .env value" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="rail-field">
+            <span class="rail-field-label">request_template<span class="field-help">?<span class="field-help-popup">JSON string describing the request body your endpoint expects. {{{{model}}}}/{{{{system}}}}/{{{{message}}}} get substituted in before sending.</span></span></span>
+            <textarea id="request-template-input" class="rail-input" rows="3" spellcheck="false">{html.escape(config.CUSTOM_REQUEST_TEMPLATE)}</textarea>
+          </div>
+          <div class="rail-field">
+            <span class="rail-field-label">response_path<span class="field-help">?<span class="field-help-popup">Dot-notation path to the answer text in the JSON response, e.g. choices.0.message.content</span></span></span>
+            <input id="response-path-input" class="rail-input" type="text" value="{html.escape(config.CUSTOM_RESPONSE_PATH)}" spellcheck="false">
+          </div>
+        </div>
+        <div class="rail-field">
           <span class="rail-field-label">corpus ({corpus_summary})<span class="field-help">?<span class="field-help-popup">Upload real, verbatim reference text (.md or .txt) &mdash; not AI-generated or paraphrased content. Include citation/license info if it isn't your own writing. One coherent topic per file works best for retrieval.</span></span></span>
           <div id="corpus-list" class="corpus-list">
             {"".join(
@@ -424,6 +453,7 @@ def render_html(results: dict) -> str:
       <span class="section-label">[METADATA]</span>
       <div class="meta-row"><span>total runs</span><span class="meta-value">{len(runs)}</span></div>
       <div class="meta-row"><span>questions/run</span><span class="meta-value">{results['num_questions']}</span></div>
+      <div class="meta-row"><span>corpus fingerprint</span><span class="meta-value" title="trend only shows runs against this exact corpus content">{html.escape(str(results.get('corpus_fingerprint', 'n/a')))}</span></div>
       <div class="meta-row"><span>judge</span></div>
       <div style="font-size:9px;color:var(--faint);margin-top:2px;">{html.escape(results['judge_model'])}</div>
     </div>
@@ -434,6 +464,17 @@ def render_html(results: dict) -> str:
       <span class="section-label">[EXPORT]</span>
       <button id="save-json-btn" class="run-eval-btn" type="button" style="margin-top:10px;">SAVE_DATA_AS_JSON</button>
       <div style="font-size:9px;color:var(--faint);margin-top:6px;">downloads every comparable run currently loaded on this page &mdash; for feeding to another LLM or tool</div>
+    </div>
+
+    <hr class="rail-divider">
+
+    <div>
+      <span class="section-label">[IMPORT]<span class="field-help">?<span class="field-help-popup">Loads a results.json produced elsewhere (another machine, a colleague, another tool) into this machine's results/ &mdash; strictly validated against the current schema_version first. Rejected outright if the shape doesn't match; nothing is coerced or guessed.</span></span></span>
+      <div class="corpus-upload" style="margin-top:10px;">
+        <input id="import-json-file-input" type="file" accept=".json">
+        <button id="import-json-btn" type="button">import</button>
+      </div>
+      <div id="import-json-error" class="run-eval-error"></div>
     </div>
   </div>
 
@@ -656,17 +697,39 @@ def render_html(results: dict) -> str:
   }})();
 
   (function() {{
+    const providerSelect = document.getElementById('target-provider-select');
+    const customFields = document.getElementById('custom-endpoint-fields');
+    providerSelect.addEventListener('change', function() {{
+      customFields.style.display = providerSelect.value === 'custom' ? 'flex' : 'none';
+    }});
+  }})();
+
+  (function() {{
     const btn = document.getElementById('run-eval-btn');
     const errEl = document.getElementById('run-eval-error');
     const modelInput = document.getElementById('model-endpoint-input');
+    const providerSelect = document.getElementById('target-provider-select');
     btn.addEventListener('click', function() {{
       btn.disabled = true;
       btn.textContent = 'RUNNING...';
       errEl.style.display = 'none';
+      const requestBody = {{ target_model: modelInput.value.trim() }};
+      if (providerSelect.value === 'custom') {{
+        const headersVal = document.getElementById('endpoint-headers-input').value.trim();
+        requestBody.endpoint_config = {{
+          provider: 'custom',
+          endpoint_url: document.getElementById('endpoint-url-input').value.trim(),
+          endpoint_headers: headersVal || null,
+          request_template: document.getElementById('request-template-input').value.trim(),
+          response_path: document.getElementById('response-path-input').value.trim(),
+        }};
+      }} else {{
+        requestBody.endpoint_config = {{ provider: 'ollama' }};
+      }}
       fetch('/run', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ target_model: modelInput.value.trim() }}),
+        body: JSON.stringify(requestBody),
       }})
         .then(function(r) {{ return r.json().then(function(data) {{ return {{ ok: r.ok, data: data }}; }}); }})
         .then(function(res) {{
@@ -736,6 +799,59 @@ def render_html(results: dict) -> str:
       reader.onerror = function() {{
         uploadBtn.disabled = false;
         uploadBtn.textContent = 'add file';
+        showError('could not read file');
+      }};
+      reader.readAsText(file);
+    }});
+  }})();
+
+  (function() {{
+    const btn = document.getElementById('import-json-btn');
+    const fileInput = document.getElementById('import-json-file-input');
+    const errEl = document.getElementById('import-json-error');
+    function showError(msg) {{
+      errEl.textContent = msg;
+      errEl.style.display = 'block';
+    }}
+    btn.addEventListener('click', function() {{
+      const file = fileInput.files[0];
+      if (!file) {{ showError('choose a .json file first'); return; }}
+      errEl.style.display = 'none';
+      btn.disabled = true;
+      btn.textContent = 'importing...';
+      const reader = new FileReader();
+      reader.onload = function() {{
+        let parsed;
+        try {{
+          parsed = JSON.parse(reader.result);
+        }} catch (e) {{
+          btn.disabled = false;
+          btn.textContent = 'import';
+          showError('not valid JSON: ' + e.message);
+          return;
+        }}
+        fetch('/results/import', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(parsed),
+        }})
+          .then(function(r) {{ return r.json().then(function(data) {{ return {{ ok: r.ok, data: data }}; }}); }})
+          .then(function(res) {{
+            if (res.ok && res.data.ok) {{
+              window.location.reload();
+            }} else {{
+              throw new Error(res.data.error || 'import failed');
+            }}
+          }})
+          .catch(function(e) {{
+            btn.disabled = false;
+            btn.textContent = 'import';
+            showError(String(e.message || e));
+          }});
+      }};
+      reader.onerror = function() {{
+        btn.disabled = false;
+        btn.textContent = 'import';
         showError('could not read file');
       }};
       reader.readAsText(file);

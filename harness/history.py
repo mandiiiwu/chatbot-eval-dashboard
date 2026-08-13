@@ -15,7 +15,10 @@ import os
 from . import config
 
 
-def load_comparable_runs(target_model: str | None = None) -> list[dict]:
+def load_comparable_runs(
+    target_model: str | None = None,
+    corpus_fingerprint: str | None = None,
+) -> list[dict]:
     """All past results/*.json runs matching the current schema_version,
     sorted oldest to newest. Excludes latest.json (a duplicate of the most
     recent timestamped file, not a distinct run).
@@ -23,7 +26,14 @@ def load_comparable_runs(target_model: str | None = None) -> list[dict]:
     target_model, if given, additionally filters to runs of that specific
     model -- fixes a real bug where the trend chart used to mix different
     models' scores onto the same line, which is misleading, not just
-    incomplete."""
+    incomplete.
+
+    corpus_fingerprint, if given, additionally filters to runs against that
+    exact corpus content -- same principle, for corpus swaps instead of
+    model swaps (e.g. this project's medical corpus vs. a future legal/HR
+    one). Runs from before this field existed have none at all (None) and
+    are correctly excluded when a fingerprint filter is active, same as
+    missing schema_version already is."""
     runs = []
     for path in sorted(glob.glob(os.path.join(config.RESULTS_DIR, "*.json"))):
         if os.path.basename(path) == "latest.json":
@@ -33,6 +43,8 @@ def load_comparable_runs(target_model: str | None = None) -> list[dict]:
         if data.get("schema_version") != config.SCHEMA_VERSION:
             continue
         if target_model is not None and data.get("target_model") != target_model:
+            continue
+        if corpus_fingerprint is not None and data.get("corpus_fingerprint") != corpus_fingerprint:
             continue
         runs.append(data)
     runs.sort(key=lambda r: r.get("timestamp", ""))

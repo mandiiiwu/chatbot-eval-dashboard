@@ -50,23 +50,35 @@ def run_evaluation(
     questions: list[dict] | None = None,
     verbose: bool = True,
     target_model: str | None = None,
+    endpoint_config: dict | None = None,
 ) -> dict:
     """target_model overrides config.TARGET_MODEL for this run only -- V2-C's
     --target-model (run_eval.py), so comparing several models doesn't
-    require hand-editing .env between runs."""
+    require hand-editing .env between runs.
+
+    endpoint_config (V2-G dashboard UI) similarly overrides
+    config.TARGET_PROVIDER/CUSTOM_* for this run only -- keys: provider,
+    endpoint_url, endpoint_headers, request_template, response_path. None
+    or a missing key means "use the .env value". Never stored in the
+    results dict (unlike target_model) -- endpoint_headers can carry an
+    auth secret, and results/*.json files are meant to be shareable."""
     questions = questions if questions is not None else load_questions()
     target_model = target_model or config.TARGET_MODEL
+    endpoint_config = endpoint_config or {}
+
+    def _chat(messages: list[dict]) -> str:
+        return target_chat(target_model, messages, **endpoint_config)
+
     per_question = []
     groups: dict[str, list[str]] = {}
 
     for q in questions:
         if verbose:
             print(f"[{q['id']}] asking target model...")
-        ungrounded = target_chat(target_model, [{"role": "user", "content": q["question"]}])
+        ungrounded = _chat([{"role": "user", "content": q["question"]}])
 
         context = retrieval.retrieve_context(q["question"])
-        grounded = target_chat(
-            target_model,
+        grounded = _chat(
             [
                 {
                     "role": "system",
@@ -114,6 +126,7 @@ def run_evaluation(
         "schema_version": config.SCHEMA_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "target_model": target_model,
+        "corpus_fingerprint": retrieval.corpus_fingerprint(),
         "judge_model": f"local: rules + {fact_check.NLI_MODEL_NAME} (no generative LLM judge)",
         "num_questions": n,
         "flagged_count": flagged,
@@ -130,6 +143,7 @@ def run_and_save(
     skip_coverage_check: bool = False,
     verbose: bool = True,
     target_model: str | None = None,
+    endpoint_config: dict | None = None,
 ) -> dict:
     """Load questions (if not given), run the coverage check (V2-H) unless
     skipped, run the evaluation, and persist results to results/. The single
@@ -139,7 +153,7 @@ def run_and_save(
     if not skip_coverage_check:
         coverage_check.require_coverage(questions)
 
-    results = run_evaluation(questions, verbose=verbose, target_model=target_model)
+    results = run_evaluation(questions, verbose=verbose, target_model=target_model, endpoint_config=endpoint_config)
 
     os.makedirs(config.RESULTS_DIR, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

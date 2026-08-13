@@ -54,32 +54,55 @@ def _extract(data, path: str):
     return current
 
 
-def chat(model: str, messages: list[dict], retries: int = 2) -> str:
+def chat(
+    model: str,
+    messages: list[dict],
+    retries: int = 2,
+    endpoint_url: str | None = None,
+    endpoint_headers: str | None = None,
+    request_template: str | None = None,
+    response_path: str | None = None,
+) -> str:
     """Same call shape as ollama_client.chat() so harness/target_client.py
     can dispatch between providers without evaluator.py knowing which one
     is active. `model` becomes the {{model}} template placeholder -- a
     label, not necessarily a real field the target API needs; only used if
-    the user's own CUSTOM_REQUEST_TEMPLATE references it."""
-    config.require_custom_endpoint()
+    the user's own CUSTOM_REQUEST_TEMPLATE references it.
+
+    The four endpoint_* parameters are per-call overrides of the matching
+    config.CUSTOM_* value -- lets the dashboard's [CONFIG] endpoint fields
+    override .env for a single run without mutating global config, same
+    pattern already used for target_model (evaluator.run_evaluation).
+    None (the default) means "use the .env value", not "use an empty one"."""
+    url = endpoint_url or config.CUSTOM_ENDPOINT_URL
+    headers_raw = endpoint_headers if endpoint_headers is not None else config.CUSTOM_ENDPOINT_HEADERS
+    template_raw = request_template if request_template is not None else config.CUSTOM_REQUEST_TEMPLATE
+    path = response_path or config.CUSTOM_RESPONSE_PATH
+
+    if not url:
+        raise CustomClientError(
+            "No custom endpoint URL configured -- set CUSTOM_ENDPOINT_URL in .env, "
+            "or fill in the endpoint_url field on the dashboard."
+        )
 
     system = next((m["content"] for m in messages if m["role"] == "system"), "")
     user = next((m["content"] for m in messages if m["role"] == "user"), "")
 
     try:
-        template = json.loads(config.CUSTOM_REQUEST_TEMPLATE)
+        template = json.loads(template_raw)
     except json.JSONDecodeError as e:
-        raise CustomClientError(f"CUSTOM_REQUEST_TEMPLATE isn't valid JSON: {e}")
+        raise CustomClientError(f"request_template isn't valid JSON: {e}")
     try:
-        headers = json.loads(config.CUSTOM_ENDPOINT_HEADERS)
+        headers = json.loads(headers_raw)
     except json.JSONDecodeError as e:
-        raise CustomClientError(f"CUSTOM_ENDPOINT_HEADERS isn't valid JSON: {e}")
+        raise CustomClientError(f"endpoint_headers isn't valid JSON: {e}")
 
     payload = _substitute(template, {"{{model}}": model, "{{system}}": system, "{{message}}": user})
 
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            resp = requests.post(config.CUSTOM_ENDPOINT_URL, json=payload, headers=headers, timeout=180)
+            resp = requests.post(url, json=payload, headers=headers, timeout=180)
         except requests.exceptions.RequestException as e:
             last_error = e
             time.sleep(2 * (attempt + 1))
@@ -91,6 +114,6 @@ def chat(model: str, messages: list[dict], retries: int = 2) -> str:
             data = resp.json()
         except json.JSONDecodeError:
             raise CustomClientError(f"Custom endpoint returned non-JSON response: {resp.text[:300]}")
-        return str(_extract(data, config.CUSTOM_RESPONSE_PATH))
+        return str(_extract(data, path))
 
     raise CustomClientError(f"Custom endpoint request failed after {retries} attempts: {last_error}")
