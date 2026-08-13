@@ -85,7 +85,7 @@ def _trend_chart_svg(runs: list[dict]) -> str:
             "intentionally excluded since their numbers aren't directly comparable.</p>"
         )
 
-    w, h, pad_l, pad_r, pad_t, pad_b = 900, 200, 30, 20, 14, 26
+    w, h, pad_l, pad_r, pad_t, pad_b = 900, 320, 30, 20, 14, 26
     n = len(runs)
 
     def x_of(i: int) -> float:
@@ -147,6 +147,37 @@ def _trend_chart_svg(runs: list[dict]) -> str:
     """
 
 
+def _leaderboard_html(rows: list[dict], current_model: str) -> str:
+    """V2-C: ranked table comparing every target_model that has been run
+    against this corpus/questions, sorted best-to-worst by avg truthfulness.
+    Populated by `run_eval.py --target-model <other-model>` -- each run just
+    records its own target_model, no new orchestration needed."""
+    if len(rows) < 2:
+        return (
+            '<p class="trend-note">Only one target model tested so far -- run '
+            "<code>python run_eval.py --target-model &lt;other-model&gt;</code> "
+            "against the same corpus/questions to compare models here.</p>"
+        )
+    row_html = "".join(
+        f"""
+        <tr class="{'current-model' if r['target_model'] == current_model else ''}">
+          <td>{html.escape(r['target_model'])}{' <span class="you-marker">(current)</span>' if r['target_model'] == current_model else ''}</td>
+          <td>{r['avg_truthfulness_score']}</td>
+          <td>{r['avg_tone_consistency_score']}</td>
+          <td>{r['avg_concern_percentage']}%</td>
+          <td>{r['runs']}</td>
+        </tr>
+        """
+        for r in rows
+    )
+    return f"""
+    <table class="leaderboard-table">
+      <thead><tr><th>model</th><th>avg truthfulness</th><th>avg tone</th><th>avg concern</th><th>runs</th></tr></thead>
+      <tbody>{row_html}</tbody>
+    </table>
+    """
+
+
 def _key_panel_html() -> str:
     items = "".join(
         f"""
@@ -167,9 +198,15 @@ def _key_panel_html() -> str:
 
 
 def render_html(results: dict) -> str:
-    runs = history.load_comparable_runs()
+    # Filtered to the current run's target_model -- V2-C fix: this used to
+    # mix different models' scores onto the same trend line, which is
+    # misleading, not just incomplete. The leaderboard below (a separate,
+    # unfiltered query) is the actual cross-model view.
+    runs = history.load_comparable_runs(target_model=results["target_model"])
     if not runs or runs[-1].get("timestamp") != results.get("timestamp"):
         runs = runs + [results]
+
+    leaderboard_rows = history.leaderboard()
 
     runs_json = json.dumps(runs)
     corpus_files = _corpus_files()
@@ -249,8 +286,8 @@ def render_html(results: dict) -> str:
   #theme-toggle .dim {{ opacity: 0.35; }}
 
   .panels-row {{ display: flex; gap: 16px; margin-bottom: 18px; }}
-  .score-panel {{ flex: 1; border: 1px solid var(--border); padding: 16px; display: flex;
-                 flex-direction: column; gap: 8px; position: relative; }}
+  .score-panel {{ flex: 1; border: 1px solid var(--border); padding: 32px; display: flex;
+                 flex-direction: column; gap: 16px; position: relative; }}
   .score-figure {{ display: flex; align-items: baseline; gap: 8px; }}
   .score-figure .num {{ font-size: 38px; font-weight: 600; }}
   .score-figure .of100 {{ font-size: 12px; color: var(--muted); }}
@@ -265,7 +302,7 @@ def render_html(results: dict) -> str:
   .score-panel:hover .meaning-popup {{ display: flex; }}
 
   section {{ margin-bottom: 20px; }}
-  .trend-box {{ border: 1px solid var(--border); padding: 18px; }}
+  .trend-box {{ border: 1px solid var(--border); padding: 32px; }}
   .trend-note {{ color: var(--muted); font-size: 0.85rem; margin: 0; }}
   .trend-svg {{ width: 100%; height: auto; overflow: visible; cursor: pointer; }}
   .gridline {{ stroke: var(--border); stroke-width: 1; }}
@@ -291,9 +328,16 @@ def render_html(results: dict) -> str:
   .trend-table th, .trend-table td {{ text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }}
   .trend-table th {{ color: var(--muted); font-weight: 500; }}
 
+  .leaderboard-box {{ border: 1px solid var(--border); padding: 32px; }}
+  .leaderboard-table {{ width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 12px; }}
+  .leaderboard-table th, .leaderboard-table td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }}
+  .leaderboard-table th {{ color: var(--muted); font-weight: 500; }}
+  .leaderboard-table tr.current-model {{ background: var(--track); }}
+  .you-marker {{ color: var(--muted); font-size: 10px; }}
+
   .groups-row {{ display: flex; gap: 16px; align-items: flex-start; }}
   .groups-col {{ flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }}
-  .sev-group summary {{ cursor: pointer; font-size: 12px; font-weight: 600; list-style: none; }}
+  .sev-group summary {{ cursor: pointer; font-size: 24px; font-weight: 700; list-style: none; margin-bottom: 4px; }}
   .sev-group summary::-webkit-details-marker {{ display: none; }}
   .sev-group summary:before {{ content: "\\25b8  "; color: var(--muted); }}
   .sev-group[open] summary:before {{ content: "\\25be  "; }}
@@ -303,11 +347,12 @@ def render_html(results: dict) -> str:
   .sev-group-body {{ margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }}
   .sev-empty {{ font-size: 11px; color: var(--muted); }}
 
-  .q-row {{ border: 1px solid var(--border); padding: 8px 10px; font-size: 11px; }}
+  .q-row {{ border: 1px solid var(--border); padding: 10px 12px; font-size: 13px; }}
   .q-row.status-critical {{ border-color: var(--bad); }}
   .q-row.status-warning {{ border-color: var(--warning); }}
   .q-row.status-good {{ border-color: var(--good); }}
-  .q-row summary {{ cursor: pointer; display: flex; justify-content: space-between; gap: 10px; list-style: none; }}
+  .q-row summary {{ cursor: pointer; display: flex; justify-content: space-between; gap: 10px;
+                    list-style: none; font-size: 13px; font-weight: 400; }}
   .q-row summary::-webkit-details-marker {{ display: none; }}
   .q-row .qtext {{ flex: 1; }}
   .q-row .qscores {{ color: var(--muted); flex-shrink: 0; }}
@@ -315,18 +360,18 @@ def render_html(results: dict) -> str:
   .q-question {{ color: var(--text); font-weight: 600; }}
   .q-verdict {{ color: var(--muted); }}
   .numeric-readout {{ display: flex; gap: 8px; }}
-  .numeric-box {{ flex: 1; border: 1px solid var(--border); padding: 6px 8px; font-size: 10px; }}
+  .numeric-box {{ flex: 1; border: 1px solid var(--border); padding: 6px 8px; font-size: 12px; }}
   .numeric-box .k {{ color: var(--muted); }}
   .numeric-box.answer {{ border-color: var(--bad); color: var(--bad); }}
   .numeric-box.reference {{ color: var(--muted); }}
   .nli-block {{ display: flex; flex-direction: column; gap: 4px; }}
   .nli-row {{ display: flex; align-items: center; gap: 8px; }}
-  .nli-sentence {{ flex: 1; font-size: 10px; color: var(--muted); }}
+  .nli-sentence {{ flex: 1; font-size: 12px; color: var(--muted); }}
   .nli-bar {{ display: flex; width: 80px; height: 6px; flex-shrink: 0; }}
   .nli-seg.entailment {{ background: var(--good); }}
   .nli-seg.neutral {{ background: var(--warning); }}
   .nli-seg.contradiction {{ background: var(--bad); }}
-  .nli-label {{ font-size: 10px; min-width: 90px; text-align: right; flex-shrink: 0; }}
+  .nli-label {{ font-size: 12px; min-width: 90px; text-align: right; flex-shrink: 0; }}
   .nli-label.status-good {{ color: var(--good); }}
   .nli-label.status-warning {{ color: var(--warning); }}
   .nli-label.status-critical {{ color: var(--bad); }}
@@ -418,6 +463,11 @@ def render_html(results: dict) -> str:
       {_trend_chart_svg(runs)}
     </section>
 
+    <section class="leaderboard-box">
+      <span class="section-label">[LEADERBOARD] compare target models on this corpus/questions</span>
+      {_leaderboard_html(leaderboard_rows, results['target_model'])}
+    </section>
+
     <section class="groups-row">
       <div class="groups-col" id="groups-col"></div>
       {_key_panel_html()}
@@ -501,7 +551,7 @@ def render_html(results: dict) -> str:
       }});
 
       const order = ['flag', 'minor', 'none'];
-      const defaultOpen = {{ flag: true, minor: true, none: false }};
+      const defaultOpen = {{ flag: false, minor: false, none: false }};
       let out = '';
       order.forEach(function(sev) {{
         const label = window.__SEVERITY_LABEL__[sev];
@@ -514,7 +564,7 @@ def render_html(results: dict) -> str:
           out += '<div class="sev-empty">none this run</div>';
         }} else {{
           qs.forEach(function(q) {{
-            out += '<details class="q-row status-' + cls + '" name="qrow">';
+            out += '<details class="q-row status-' + cls + '">';
             out += '<summary><span class="qtext">' + escapeHtml(categoryLabel(q.id)) + '</span>' +
               '<span class="qscores">T ' + q.truthfulness_score + ' &middot; C ' + q.tone_consistency_score + '</span></summary>';
             out += renderQuestionDetail(q);

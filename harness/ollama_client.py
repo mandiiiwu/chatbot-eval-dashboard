@@ -24,7 +24,16 @@ def chat(
     """Send a chat completion request to local Ollama, return the assistant's
     text reply. Retries on connection errors (e.g. the model is still being
     loaded into memory on the first call)."""
-    config.require_target_model()
+    if not model:
+        # Validates the actual model that will be used for this call, not
+        # config.TARGET_MODEL directly -- V2-C's --target-model override
+        # (run_eval.py) can supply a model without ever setting .env's
+        # TARGET_MODEL, so checking the global would reject a valid call.
+        raise SystemExit(
+            "No target model specified. Set TARGET_MODEL in .env, or pass "
+            "--target-model to run_eval.py (see `ollama list` for what's "
+            "available locally)."
+        )
     payload = {
         "model": model,
         "messages": messages,

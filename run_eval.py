@@ -4,6 +4,9 @@
 Usage:
     python run_eval.py
     python run_eval.py --questions questions/sample_questions.json
+    python run_eval.py --target-model some-other-model   # V2-C: compare models
+    without hand-editing .env between runs -- see the dashboard's leaderboard
+    section for the resulting side-by-side comparison.
 """
 
 import argparse
@@ -30,14 +33,28 @@ def main():
             "questions/corpus, not a real eval worth running."
         ),
     )
+    parser.add_argument(
+        "--target-model",
+        default=None,
+        help=(
+            "Override TARGET_MODEL for this run only, without touching .env "
+            "(V2-C: run the same corpus+questions against several models to "
+            "compare them on the dashboard's leaderboard)."
+        ),
+    )
     args = parser.parse_args()
 
     with open(args.questions) as f:
         questions = json.load(f)
 
-    results = run_and_save(questions, skip_coverage_check=args.skip_coverage_check)
+    results = run_and_save(
+        questions,
+        skip_coverage_check=args.skip_coverage_check,
+        target_model=args.target_model,
+    )
 
     print()
+    print(f"target model: {results['target_model']}")
     print(f"concern percentage: {results['concern_percentage']}%  "
           f"({results['flagged_count']}/{results['num_questions']} flagged)")
     print(f"avg truthfulness score: {results['avg_truthfulness_score']}")

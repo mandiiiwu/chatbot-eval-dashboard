@@ -74,6 +74,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
 def serve() -> None:
     os.chdir(config.RESULTS_DIR)
+    # allow_reuse_address: without this, restarting the server (e.g. after
+    # editing report.py) can fail with "Address already in use" for up to a
+    # minute -- the just-killed process's socket lingers in TIME_WAIT and
+    # blocks rebinding even though no process is actually holding it.
+    socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("127.0.0.1", PORT), DashboardHandler) as httpd:
         print(f"Dashboard live at http://localhost:{PORT}  (Ctrl+C to stop)")
         try:

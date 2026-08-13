@@ -46,19 +46,27 @@ def load_questions() -> list[dict]:
         return json.load(f)
 
 
-def run_evaluation(questions: list[dict] | None = None, verbose: bool = True) -> dict:
+def run_evaluation(
+    questions: list[dict] | None = None,
+    verbose: bool = True,
+    target_model: str | None = None,
+) -> dict:
+    """target_model overrides config.TARGET_MODEL for this run only -- V2-C's
+    --target-model (run_eval.py), so comparing several models doesn't
+    require hand-editing .env between runs."""
     questions = questions if questions is not None else load_questions()
+    target_model = target_model or config.TARGET_MODEL
     per_question = []
     groups: dict[str, list[str]] = {}
 
     for q in questions:
         if verbose:
             print(f"[{q['id']}] asking target model...")
-        ungrounded = target_chat(config.TARGET_MODEL, [{"role": "user", "content": q["question"]}])
+        ungrounded = target_chat(target_model, [{"role": "user", "content": q["question"]}])
 
         context = retrieval.retrieve_context(q["question"])
         grounded = target_chat(
-            config.TARGET_MODEL,
+            target_model,
             [
                 {
                     "role": "system",
@@ -105,7 +113,7 @@ def run_evaluation(questions: list[dict] | None = None, verbose: bool = True) ->
     return {
         "schema_version": config.SCHEMA_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "target_model": config.TARGET_MODEL,
+        "target_model": target_model,
         "judge_model": f"local: rules + {fact_check.NLI_MODEL_NAME} (no generative LLM judge)",
         "num_questions": n,
         "flagged_count": flagged,
@@ -121,6 +129,7 @@ def run_and_save(
     questions: list[dict] | None = None,
     skip_coverage_check: bool = False,
     verbose: bool = True,
+    target_model: str | None = None,
 ) -> dict:
     """Load questions (if not given), run the coverage check (V2-H) unless
     skipped, run the evaluation, and persist results to results/. The single
@@ -130,7 +139,7 @@ def run_and_save(
     if not skip_coverage_check:
         coverage_check.require_coverage(questions)
 
-    results = run_evaluation(questions, verbose=verbose)
+    results = run_evaluation(questions, verbose=verbose, target_model=target_model)
 
     os.makedirs(config.RESULTS_DIR, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
