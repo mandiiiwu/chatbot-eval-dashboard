@@ -20,7 +20,7 @@ import json
 import os
 from datetime import datetime, timezone
 
-from . import config, coverage_check, embeddings, fact_check, report, retrieval
+from . import alerting, config, coverage_check, embeddings, fact_check, report, retrieval
 from .ollama_client import chat as target_chat
 
 
@@ -149,5 +149,6 @@ def run_and_save(
     with open(os.path.join(config.RESULTS_DIR, "latest.json"), "w") as f:
         json.dump(results, f, indent=2)
     report.write_report(results, os.path.join(config.RESULTS_DIR, "latest.html"))
+    alerting.maybe_alert(results)  # V2-D: local notification if concern_percentage crosses the line
 
     return results

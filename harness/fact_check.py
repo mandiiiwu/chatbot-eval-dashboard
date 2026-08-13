@@ -40,6 +40,42 @@ _NUM_UNIT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# A separate, purely lexical signal from the numeric/NLI checks -- doesn't
+# drive severity (flag/minor/ok), just surfaces "this answer hedged instead
+# of answering" as its own warning. Deliberately narrow: phrases chosen to be
+# near-unambiguous evasion markers, not anything that could plausibly appear
+# in a substantive answer (e.g. "it depends on whether it's type 1 or type 2"
+# is a real conditional answer, not vagueness, so "it depends" alone isn't
+# on this list). Added 2026-08-13 after a real case (diabetes_q1-2) where the
+# current NLI judge was 86% confident an evasive non-answer was "entailment"
+# while several other NLI models were confidently the opposite -- see
+# PLAN.md. A rule-based flag doesn't resolve that disagreement, but at least
+# surfaces the evasiveness pattern that likely caused it.
+_VAGUE_HEDGE_PHRASES = [
+    "there is no single answer",
+    "there is no definitive answer",
+    "there is no one-size-fits-all",
+    "the question is not clear",
+    "it is not clear",
+    "it is difficult to say",
+    "without more information",
+    "may vary depending on",
+    "varies depending on",
+    "consult a healthcare provider",
+    "consult your doctor",
+]
+
+
+def detect_vague_hedge(text: str) -> str | None:
+    """Returns the first matched hedge phrase, or None. Whole-answer scan,
+    not per-sentence -- these phrases characterize the answer's overall
+    evasiveness, not a single claim."""
+    lowered = text.lower()
+    for phrase in _VAGUE_HEDGE_PHRASES:
+        if phrase in lowered:
+            return phrase
+    return None
+
 
 @lru_cache(maxsize=1)
 def _nli_model():
@@ -148,6 +184,7 @@ def check_answer(reference_context: str, answer: str) -> dict:
     # cost). Both signals now always populate `evidence`, and severity is
     # `flag` if EITHER fires, with the reason reflecting whichever did.
     numeric = compare_numeric_claims(answer, reference_context)
+    vague_hedge = detect_vague_hedge(answer)
 
     if not reference_context:
         return {
@@ -155,7 +192,7 @@ def check_answer(reference_context: str, answer: str) -> dict:
             "concern": False,
             "truthfulness_score": 100,
             "reason": "No reference material was retrieved for this question -- nothing to check against.",
-            "evidence": {"numeric": numeric, "nli_per_sentence": []},
+            "evidence": {"numeric": numeric, "nli_per_sentence": [], "vague_hedge": vague_hedge},
         }
 
     # reference_context is retrieval.py's top-k chunks joined with blank
@@ -270,5 +307,5 @@ def check_answer(reference_context: str, answer: str) -> dict:
         "concern": concern,
         "truthfulness_score": truthfulness_score,
         "reason": reason,
-        "evidence": {"numeric": numeric, "nli_per_sentence": per_sentence},
+        "evidence": {"numeric": numeric, "nli_per_sentence": per_sentence, "vague_hedge": vague_hedge},
     }

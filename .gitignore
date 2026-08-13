@@ -5,6 +5,7 @@ __pycache__/
 results/*.json
 results/*.html
 results/*.log
+results/*.jsonl
 results/archive*/
 !results/.gitkeep
 .DS_Store

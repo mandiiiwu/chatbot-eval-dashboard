@@ -320,6 +320,8 @@ def render_html(results: dict) -> str:
   .q-detail {{ margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }}
   .q-question {{ color: var(--text); font-weight: 600; }}
   .q-verdict {{ color: var(--muted); }}
+  .vague-warning {{ color: var(--warning); border: 1px dashed var(--warning); padding: 6px 8px; font-size: 12px; }}
+  .hedge-marker {{ color: var(--warning); font-size: 11px; font-weight: 600; }}
   .numeric-readout {{ display: flex; gap: 8px; }}
   .numeric-box {{ flex: 1; border: 1px solid var(--border); padding: 6px 8px; font-size: 12px; }}
   .numeric-box .k {{ color: var(--muted); }}
@@ -476,6 +478,11 @@ def render_html(results: dict) -> str:
       html += '<div class="q-question">' + escapeHtml(q.question) + '</div>';
       html += '<div class="q-verdict">' + escapeHtml(q.reason) + '</div>';
 
+      if (ev.vague_hedge) {{
+        html += '<div class="vague-warning">&#9888; possible non-answer &mdash; contains hedging language ("' +
+          escapeHtml(ev.vague_hedge) + '"). Severity above is unaffected; this is a separate signal worth a human look.</div>';
+      }}
+
       if (numeric.mismatches && numeric.mismatches.length) {{
         numeric.mismatches.forEach(function(m) {{
           html += '<div class="numeric-readout">' +
@@ -520,8 +527,10 @@ def render_html(results: dict) -> str:
           out += '<div class="sev-empty">none this run</div>';
         }} else {{
           qs.forEach(function(q) {{
+            const hasHedge = q.evidence && q.evidence.vague_hedge;
             out += '<details class="q-row status-' + cls + '">';
-            out += '<summary><span class="qtext">' + escapeHtml(categoryLabel(q.id)) + '</span>' +
+            out += '<summary><span class="qtext">' + escapeHtml(categoryLabel(q.id)) +
+              (hasHedge ? ' <span class="hedge-marker" title="possible non-answer">&#9888; vague</span>' : '') + '</span>' +
               '<span class="qscores">T ' + q.truthfulness_score + ' &middot; C ' + q.tone_consistency_score + '</span></summary>';
             out += renderQuestionDetail(q);
             out += '</details>';
