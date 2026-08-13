@@ -176,14 +176,7 @@ def check_answer(reference_context: str, answer: str) -> dict:
     # matching sentence for a correct answer during testing). This matches
     # the current corpus/*.md convention (see corpus files' own headers) --
     # if that convention changes, this filter needs to change with it.
-    reference_chunks = [
-        c.strip()
-        for c in reference_context.split("\n\n")
-        if c.strip()
-        and not c.strip().startswith("#")
-        and not c.strip().startswith("**")
-        and "not written or paraphrased by an ai" not in c.lower()
-    ]
+    reference_chunks = [c.strip() for c in reference_context.split("\n\n") if retrieval.is_content_chunk(c)]
     if not reference_chunks:
         reference_chunks = [reference_context]
 
@@ -241,17 +234,34 @@ def check_answer(reference_context: str, answer: str) -> dict:
                 "answer and the reference material."
             )
         reason = " ".join(reasons)
-    elif "neutral" in labels:
+    elif "entailment" in labels:
+        # Recalibrated 2026-08-13 (see PLAN.md): "ok" used to require EVERY
+        # sentence to be argmax-entailment, which this NLI model almost
+        # never gives for a real chatbot answer that elaborates beyond a
+        # terse reference paragraph -- across 3 real runs (105 questions),
+        # that rule put 74% of answers in "minor" and only 2% in "ok",
+        # regardless of how well-supported the content actually was.
+        # Redefined around a real, threshold-free distinction instead: did
+        # the answer contain at least one sentence the reference clearly
+        # confirms, vs. zero confirmed and zero contradicted. Verified this
+        # separates cleanly on the same real data (30 promoted to "ok", the
+        # other 50 genuinely have no confirmed sentence at all).
+        severity, concern = "none", False
+        reason = "Answer is consistent with the reference material" + (
+            " -- at least one claim is directly supported; other parts add unverified detail."
+            if "neutral" in labels else "."
+        )
+    else:
+        # Every sentence is neutral (contradiction was already handled
+        # above) -- nothing in the answer could be confirmed by the
+        # reference, but nothing contradicted it either.
         worst = max((s for s in per_sentence if s["label"] == "neutral"), key=lambda s: s["neutral"])
         severity, concern = "minor", False
         reason = (
-            f"Answer isn't clearly entailed by the reference material (neutral "
-            f"p={worst['neutral']:.2f}) -- likely adds detail beyond what the reference "
-            "covers, not a contradiction."
+            f"No sentence in the answer is clearly entailed by the reference material "
+            f"(neutral p={worst['neutral']:.2f}) -- likely adds detail beyond what the "
+            "reference covers, not a contradiction."
         )
-    else:
-        severity, concern = "none", False
-        reason = "Answer is consistent with the reference material."
 
     max_contradiction = max((s["contradiction"] for s in per_sentence), default=0.0)
     truthfulness_score = 0 if numeric_mismatch else round(100 * (1 - max_contradiction))

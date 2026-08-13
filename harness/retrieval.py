@@ -27,6 +27,39 @@ def tokenize(text: str) -> set[str]:
     return {w for w in words if w not in _STOPWORDS and len(w) > 2}
 
 
+# A chunk is "content" (real reference material) vs. metadata (headers,
+# citation/license lines, this project's own corpus-provenance disclaimer)
+# -- shared by fact_check.py (don't NLI-compare an answer against a
+# citation line) and question_gen.py (don't generate a question from a
+# license blurb). One predicate, not two copies of the same filter.
+_DISCLAIMER_MARKER = "not written or paraphrased by an ai"
+
+
+def is_content_chunk(chunk: str) -> bool:
+    c = chunk.strip()
+    return bool(c) and not c.startswith("#") and not c.startswith("**") and _DISCLAIMER_MARKER not in c.lower()
+
+
+def load_chunks_by_file() -> dict[str, list[str]]:
+    """Content-only corpus chunks (see is_content_chunk), grouped by source
+    filename -- what question_gen.py seeds candidate questions from, one
+    topic per file. Separate from _load_chunks()/_chunk_embeddings() (which
+    stay unfiltered, flat, and untouched here) so this doesn't change what
+    retrieval/coverage-check see or risk invalidating V2-H's calibrated
+    threshold."""
+    result: dict[str, list[str]] = {}
+    if not os.path.isdir(config.CORPUS_DIR):
+        return result
+    for fname in sorted(os.listdir(config.CORPUS_DIR)):
+        if not fname.endswith((".md", ".txt")):
+            continue
+        with open(os.path.join(config.CORPUS_DIR, fname)) as f:
+            text = f.read()
+        chunks = [p.strip() for p in re.split(r"\n\s*\n", text) if len(p.strip()) > 30]
+        result[fname] = [c for c in chunks if is_content_chunk(c)]
+    return result
+
+
 def _load_chunks() -> list[str]:
     chunks = []
     if not os.path.isdir(config.CORPUS_DIR):

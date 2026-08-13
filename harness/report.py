@@ -53,12 +53,12 @@ _KEY_ITEMS = [
         "or any answer sentence NLI-contradicts it",
     ]),
     ("minor", "warning", [
-        "no contradiction, but a sentence isn't clearly entailed (NLI-neutral)",
+        "no contradiction, but no sentence is clearly entailed (all NLI-neutral)",
         "often just detail the reference doesn't cover, not an error",
     ]),
     ("ok", "good", [
-        "every sentence entailed by the reference",
-        "and no numeric mismatch",
+        "at least one sentence is clearly entailed by the reference",
+        "and no numeric mismatch or contradiction",
     ]),
 ]
 _KEY_CAVEATS = [

@@ -11,10 +11,8 @@ MDC_BASE_URL = "https://api.microdc.ai/v1"
 MDC_API_KEY = os.environ.get("MDC_API_KEY", "")
 
 # The target model ("the chatbot under test") runs locally via Ollama
-# (harness/ollama_client.py) -- it's not on MicroDC's catalog. The judge
-# stays on MicroDC, deliberately from a different model family than the
-# target to avoid same-family judge bias. Full MicroDC catalog + live
-# pricing: https://api.microdc.ai/api/public/models
+# (harness/ollama_client.py) -- it's not on MicroDC's catalog. Full MicroDC
+# catalog + live pricing: https://api.microdc.ai/api/public/models
 #
 # TARGET_MODEL has no default: this harness is meant to evaluate whatever
 # specific-purpose chatbot you point it at (medical, legal, support, etc),
@@ -22,7 +20,17 @@ MDC_API_KEY = os.environ.get("MDC_API_KEY", "")
 # Every run must say explicitly what it's testing.
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 TARGET_MODEL = os.environ.get("TARGET_MODEL", "")
-JUDGE_MODEL = os.environ.get("MDC_JUDGE_MODEL", "gpt-oss:120b")
+
+# V2-I: generates candidate questions/paraphrase-variants from the corpus
+# (harness/question_gen.py). Stays on MicroDC, deliberately a different
+# model family than the target -- the same "don't let a model grade/design
+# its own exam" principle this project already applied to judging. This
+# variable used to be named JUDGE_MODEL/MDC_JUDGE_MODEL, back when MicroDC
+# hosted an LLM judge; renamed when that was replaced by the local rules+NLI
+# judge (see feedback_no_llm_judge memory) -- kept the same default model
+# and env var *value*, since gpt-oss:120b already satisfied the
+# different-model-family requirement, just gained a new job.
+GENERATION_MODEL = os.environ.get("MDC_GENERATION_MODEL", "gpt-oss:120b")
 
 
 def require_target_model() -> str:
@@ -49,7 +57,15 @@ def require_target_model() -> str:
 # avg_truthfulness_score -- disambiguates from tone_consistency_score, which
 # measures something unrelated (paraphrase stability, not fact-check
 # agreement) but shared the word "consistency" and was genuinely confusing.
-SCHEMA_VERSION = 2
+# v3 (2026-08-13): recalibrated the none/minor severity boundary in
+# fact_check.py -- "ok" no longer requires every sentence to be
+# argmax-entailment (near-unachievable in practice, saw 74% minor / 2% ok
+# across 3 real runs), now requires at least one entailed sentence and zero
+# contradiction. Same underlying evidence/scores, different severity labels
+# on top of them -- v2 runs would be silently mislabeled if compared
+# directly against v3 ones. Pre-recalibration data archived, not deleted:
+# results/archive_pre_severity_recalibration_2026-08-13/.
+SCHEMA_VERSION = 3
 
 CORPUS_DIR = os.path.join(os.path.dirname(__file__), "..", "corpus")
 QUESTIONS_FILE = os.path.join(
