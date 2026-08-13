@@ -147,37 +147,6 @@ def _trend_chart_svg(runs: list[dict]) -> str:
     """
 
 
-def _leaderboard_html(rows: list[dict], current_model: str) -> str:
-    """V2-C: ranked table comparing every target_model that has been run
-    against this corpus/questions, sorted best-to-worst by avg truthfulness.
-    Populated by `run_eval.py --target-model <other-model>` -- each run just
-    records its own target_model, no new orchestration needed."""
-    if len(rows) < 2:
-        return (
-            '<p class="trend-note">Only one target model tested so far -- run '
-            "<code>python run_eval.py --target-model &lt;other-model&gt;</code> "
-            "against the same corpus/questions to compare models here.</p>"
-        )
-    row_html = "".join(
-        f"""
-        <tr class="{'current-model' if r['target_model'] == current_model else ''}">
-          <td>{html.escape(r['target_model'])}{' <span class="you-marker">(current)</span>' if r['target_model'] == current_model else ''}</td>
-          <td>{r['avg_truthfulness_score']}</td>
-          <td>{r['avg_tone_consistency_score']}</td>
-          <td>{r['avg_concern_percentage']}%</td>
-          <td>{r['runs']}</td>
-        </tr>
-        """
-        for r in rows
-    )
-    return f"""
-    <table class="leaderboard-table">
-      <thead><tr><th>model</th><th>avg truthfulness</th><th>avg tone</th><th>avg concern</th><th>runs</th></tr></thead>
-      <tbody>{row_html}</tbody>
-    </table>
-    """
-
-
 def _key_panel_html() -> str:
     items = "".join(
         f"""
@@ -198,15 +167,14 @@ def _key_panel_html() -> str:
 
 
 def render_html(results: dict) -> str:
-    # Filtered to the current run's target_model -- V2-C fix: this used to
-    # mix different models' scores onto the same trend line, which is
-    # misleading, not just incomplete. The leaderboard below (a separate,
-    # unfiltered query) is the actual cross-model view.
+    # Filtered to the current run's target_model -- fixes a real bug where
+    # this used to mix different models' scores onto the same trend line,
+    # which is misleading, not just incomplete. Kept independent of the
+    # leaderboard UI (removed 2026-08-13, not a wanted feature) since the
+    # bug it fixes exists regardless of whether there's a comparison view.
     runs = history.load_comparable_runs(target_model=results["target_model"])
     if not runs or runs[-1].get("timestamp") != results.get("timestamp"):
         runs = runs + [results]
-
-    leaderboard_rows = history.leaderboard()
 
     runs_json = json.dumps(runs)
     corpus_files = _corpus_files()
@@ -327,13 +295,6 @@ def render_html(results: dict) -> str:
   .trend-table {{ width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.76rem; }}
   .trend-table th, .trend-table td {{ text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }}
   .trend-table th {{ color: var(--muted); font-weight: 500; }}
-
-  .leaderboard-box {{ border: 1px solid var(--border); padding: 32px; }}
-  .leaderboard-table {{ width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 12px; }}
-  .leaderboard-table th, .leaderboard-table td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }}
-  .leaderboard-table th {{ color: var(--muted); font-weight: 500; }}
-  .leaderboard-table tr.current-model {{ background: var(--track); }}
-  .you-marker {{ color: var(--muted); font-size: 10px; }}
 
   .groups-row {{ display: flex; gap: 16px; align-items: flex-start; }}
   .groups-col {{ flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }}
@@ -461,11 +422,6 @@ def render_html(results: dict) -> str:
     <section class="trend-box">
       <span class="section-label">[TREND OVER TIME] click a run to see more detail</span>
       {_trend_chart_svg(runs)}
-    </section>
-
-    <section class="leaderboard-box">
-      <span class="section-label">[LEADERBOARD] compare target models on this corpus/questions</span>
-      {_leaderboard_html(leaderboard_rows, results['target_model'])}
     </section>
 
     <section class="groups-row">
