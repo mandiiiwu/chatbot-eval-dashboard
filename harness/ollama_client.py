@@ -1,5 +1,5 @@
 """Thin wrapper around a local Ollama server's OpenAI-compatible chat
-completions endpoint. Used only for the target model -- the judge model
+completions endpoint. Used only for the target model; the judge model
 stays on MicroDC (see harness/microdc_client.py) to avoid a same-family
 judge and to keep judge calls off the local machine's GPU/CPU."""
 
@@ -26,7 +26,7 @@ def chat(
     loaded into memory on the first call)."""
     if not model:
         # Validates the actual model that will be used for this call, not
-        # config.TARGET_MODEL directly -- V2-C's --target-model override
+        # config.TARGET_MODEL directly; V2-C's --target-model override
         # (run_eval.py) can supply a model without ever setting .env's
         # TARGET_MODEL, so checking the global would reject a valid call.
         raise SystemExit(

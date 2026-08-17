@@ -1,5 +1,5 @@
 """Validates and persists an externally-produced results.json (the
-dashboard's [IMPORT] button) -- lets a run computed elsewhere (another
+dashboard's [IMPORT] button)—lets a run computed elsewhere (another
 machine, a colleague's export, another tool's output) join this machine's
 results/ the same way a real RUN_EVAL run would, so it shows up in the
 trend chart and severity groups like any other run.
@@ -9,7 +9,7 @@ wrong-shaped file is rejected outright with a specific reason, never
 silently coerced or partially accepted. Silently accepting a shape
 mismatch would corrupt the trend chart's comparability guarantees the
 same way schema_version/target_model/corpus_fingerprint already protect
-against mixing incompatible runs (see harness/history.py) -- an import is
+against mixing incompatible runs (see harness/history.py); an import is
 just another way an incompatible run could sneak in."""
 
 import json
@@ -56,7 +56,7 @@ _VALID_SEVERITIES = {"flag", "minor", "none"}  # "none" here is the raw severity
 
 
 def _type_ok(value, expected_type) -> bool:
-    """isinstance() but bool never silently matches int/float -- Python's
+    """isinstance() but bool never silently matches int/float; Python's
     bool is a subclass of int, so isinstance(True, int) is True by
     default, which would let a JSON boolean sneak past as a numeric
     field (e.g. num_questions: true)."""
@@ -69,7 +69,7 @@ def validate(data) -> None:
     """Raises ImportValidationError with a specific, actionable reason on
     the first mismatch found; returns silently if the shape is valid.
     Unknown extra fields are allowed through untouched (e.g.
-    corpus_fingerprint, additive since schema_version 3) -- this checks
+    corpus_fingerprint, additive since schema_version 3); this checks
     that the required shape is present and correctly typed, not that
     nothing else exists."""
     if not isinstance(data, dict):
@@ -84,7 +84,7 @@ def validate(data) -> None:
     if data["schema_version"] != config.SCHEMA_VERSION:
         raise ImportValidationError(
             f"schema_version {data['schema_version']} does not match this harness's "
-            f"current schema_version {config.SCHEMA_VERSION} -- results from a different "
+            f"current schema_version {config.SCHEMA_VERSION}; results from a different "
             f"harness architecture aren't comparable (see PLAN.md's SCHEMA_VERSION history)"
         )
 
@@ -122,7 +122,7 @@ def validate(data) -> None:
 
 def save(data: dict) -> str:
     """Validates, then persists exactly like evaluator.run_and_save() does
-    -- a timestamped file plus latest.json/latest.html -- so an imported
+    —a timestamped file plus latest.json/latest.html—so an imported
     run behaves identically to one this machine produced itself. The
     filename is derived from the run's own `timestamp` field (not import
     time), so re-importing the same export is idempotent rather than

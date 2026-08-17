@@ -10,6 +10,16 @@ results/archive*/
 !results/.gitkeep
 .DS_Store
 
+# This repo's own corpus/questions (this project's BioMistral/medical test data) --
+# a fresh clone should start with an empty corpus and no question set, matching
+# the "bring your own model and corpus" design goal, not this project's own
+# validation data. See PLAN.md/memory for context.
+corpus/*.md
+corpus/*.txt
+!corpus/.gitkeep
+questions/*.json
+!questions/.gitkeep
+
 # internal planning/reference docs -- not part of the public release
 PLAN.md
 README_example.md

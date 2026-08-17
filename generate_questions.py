@@ -6,12 +6,14 @@ Usage:
     python generate_questions.py --questions-per-topic 5 --variants-per-question 5
     python generate_questions.py --output questions/generated_questions.json
 
-Writes a questions/*.json file in the same schema as sample_questions.json
-(id/group_id/question) -- run it against your target model the same way:
-    python run_eval.py --questions questions/generated_questions.json
-
-Doesn't touch questions/sample_questions.json -- generated questions are
-opt-in via --questions, not a replacement for hand-curated ones.
+Writes a questions/*.json file (id/group_id/question schema). This is a
+manual, standalone way to run generation with control over its parameters
+(counts, output path) -- run_eval.py and the dashboard's RUN_EVAL button
+both do this same generation automatically now if no questions file is
+configured (see PLAN.md's 2026-08-16 addition), so running this script by
+hand first is optional, not a required step. Never overwrites a hand-
+curated or previously-generated file at a different path unless you point
+--output at it explicitly.
 """
 
 import argparse

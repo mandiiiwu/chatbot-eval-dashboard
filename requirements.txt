@@ -12,6 +12,11 @@ git+https://gitlab.com/microdc/python-client.git
 transformers
 torch
 
+# Corpus ingestion (harness/corpus_ingest.py) -- PDF text extraction for
+# uploaded/zipped/URL-fetched corpus files. zipfile is stdlib, no install
+# needed for zip support itself.
+pypdf
+
 # NOT installed: scispacy (planned for entity extraction alongside the
 # regex numeric checks in fact_check.py). Its dependency chain (spaCy ->
 # thinc -> blis) has no prebuilt wheels for Python 3.14 yet and fails to

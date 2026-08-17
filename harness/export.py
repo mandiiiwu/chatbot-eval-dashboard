@@ -1,17 +1,17 @@
-"""V2-E: export flagged/minor answers as training data -- "closing the loop"
+"""V2-E: export flagged/minor answers as training data—"closing the loop"
 from eval output back toward retraining, without actually building a
 fine-tuning pipeline (that's a deliberate future decision, not something to
-slip in as a side effect -- see PLAN.md's V2-E and the long-term-plan note
+slip in as a side effect—see PLAN.md's V2-E and the long-term-plan note
 next to it).
 
 Deliberately does NOT use the original plan's "ungrounded (wrong) vs.
-grounded (correct)" framing -- grounded_answer is never scored by
+grounded (correct)" framing; grounded_answer is never scored by
 fact_check.py, so it isn't verified to actually be correct. Caught a real
 case of this: diabetes_q1-2's grounded_answer was an evasive non-answer
 ("The question is not clear..."), not something you'd want as a positive
 training example. Uses the real corpus text (reference_context) as the
 verified-correct side instead, and flags grounded_answer's reliability
-separately (reusing fact_check.detect_vague_hedge -- already validated, not
+separately (reusing fact_check.detect_vague_hedge—already validated, not
 new unverified machinery) rather than silently trusting it.
 """
 
@@ -22,7 +22,7 @@ from . import fact_check, retrieval
 
 def _clean_reference(reference_context: str) -> str:
     """Strips markdown headers/citation boilerplate, keeping just the real
-    content -- reuses the same filter fact_check.py and question_gen.py
+    content—reuses the same filter fact_check.py and question_gen.py
     already rely on, rather than a third copy of this logic. A training-data
     export shouldn't include "**Citation:** ..." lines as if they were part
     of the reference content."""

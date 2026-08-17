@@ -2,7 +2,7 @@
 
 Method (see PLAN.md for the full design discussion/approval): for each
 corpus file (one "topic"), generate candidate questions from its real
-content chunks via a MicroDC model (harness/microdc_client.py) --
+content chunks via a MicroDC model (harness/microdc_client.py)—
 deliberately a different model family than TARGET_MODEL, the same
 don't-let-a-model-write-its-own-exam principle already applied to judging.
 For each accepted candidate, generate a few phrasing/tone variants sharing
@@ -12,21 +12,21 @@ Two guardrails, both reusing existing infrastructure rather than trusting
 generated text on its own:
   1. Every candidate question (and every variant) must pass the SAME
      coverage check (harness/coverage_check.py, V2-H) a human-written
-     question would -- cosine similarity >= COVERAGE_THRESHOLD against the
+     question would—cosine similarity >= COVERAGE_THRESHOLD against the
      corpus. Generated text earns its way in; it isn't assumed grounded.
   2. Every variant must also score >= PARAPHRASE_THRESHOLD cosine
      similarity against its own group's canonical question, catching
      clear drift (a variant that became a different question, not just a
      different phrasing) before it corrupts the tone-consistency check,
      which assumes all variants in a group ask the same thing. This isn't
-     as clean a filter as guardrail 1 -- see PARAPHRASE_THRESHOLD's own
+     as clean a filter as guardrail 1—see PARAPHRASE_THRESHOLD's own
      comment for why question-vs-question similarity can't fully separate
      "reworded" from "same-topic-but-different." The variant-generation
      prompt's explicit intent-preservation instruction is the primary
      defense; this is a secondary catch, not a guarantee.
 
 Per the user's explicit choice (2026-08-13): questions_per_topic/
-variants_per_question are a CEILING, not a guarantee -- if a topic's real
+variants_per_question are a CEILING, not a guarantee; if a topic's real
 corpus content can't honestly support the requested count, this generates
 fewer and reports actual-vs-requested rather than forcing weak questions
 through or silently coming up short.
@@ -34,6 +34,7 @@ through or silently coming up short.
 
 import os
 import re
+from typing import Callable
 
 from . import config, coverage_check, microdc_client, retrieval
 from .config import GENERATION_MODEL
@@ -45,60 +46,69 @@ VARIANTS_PER_QUESTION_DEFAULT = 4
 # separation as V2-H's coverage check: real MicroDC-generated variants of
 # one real candidate question scored 0.72-0.96 cosine similarity to their
 # canonical question, but deliberately-different questions on the SAME
-# topic (e.g. "what causes CAP" vs. "how severe is CAP") scored 0.53-0.78 --
+# topic (e.g. "what causes CAP" vs. "how severe is CAP") scored 0.53-0.78—
 # overlapping the real range. Unlike question-vs-corpus-chunk similarity
 # (V2-H), question-vs-question similarity on short text seems to track
 # topical closeness more than precise intent, so no threshold here fully
 # separates "reworded" from "same-topic-but-different". 0.68 clears the
 # clearest drift case (0.53) with margin and keeps every real variant
-# observed (min 0.72) with a little headroom -- but a variant that drifts
+# observed (min 0.72) with a little headroom—but a variant that drifts
 # to a *closely related* same-topic question could still slip through.
 # The variant-generation prompt's explicit "same intent, same expected
 # answer" instruction is the primary defense; this threshold is a
-# secondary catch for clear failures, not a fully reliable filter -- said
+# secondary catch for clear failures, not a fully reliable filter—said
 # so directly rather than overclaiming precision this metric doesn't have.
 PARAPHRASE_THRESHOLD = 0.68
 
-# Ordered so the first (variants_per_question - 1) get used by default --
+# Ordered so the first (variants_per_question - 1) get used by default—
 # real-world-usage variety first (typo'd/rushed, roundabout), cleaner
 # registers after. Updated 2026-08-13 per user feedback: the original set
-# (casual/formal/brief/worried) was too uniformly "clean" -- real chatbot
+# (casual/formal/brief/worried) was too uniformly "clean"; real chatbot
 # users type fast with minor errors, and often hedge/backstory their way to
 # the actual question instead of asking directly.
 _TONE_HINTS = [
-    "very casual, typed quickly on a phone -- include a couple of small, "
+    "very casual, typed quickly on a phone; include a couple of small, "
     "easily-readable typos or grammar slips (a dropped word, missing "
     "capitalization, a common misspelling), but the question must still be "
     "clearly understandable, not garbled",
-    "roundabout and indirect -- give a little unnecessary backstory or "
+    "roundabout and indirect; give a little unnecessary backstory or "
     "context before getting to the actual question, the way real people "
     "often over-explain to a chatbot instead of just asking directly",
     "casual and conversational, plain everyday language, like texting a friend",
-    "formal and precise, using correct clinical terminology",
+    "formal and precise, using correct technical/professional terminology",
     "brief and direct, as few words as possible while staying a complete question",
-    "a worried patient hedging and unsure, asking in their own words, not medical jargon",
+    "a worried/unsure user hedging, asking in their own words, not technical jargon",
 ]
 
 # Generic descriptor words stripped when deriving a short topic name from a
-# corpus file's title -- not meaningful on their own (every file in this
+# corpus file's title—not meaningful on their own (every file in this
 # genre has an "overview" or "guidelines"), so they'd make every topic name
 # look the same instead of naming what's actually distinctive about it.
+# Domain-neutral on purpose (generalized 2026-08-14, see PLAN.md): the
+# original list had medical-specific words (diagnosis/treatment/nutritional/
+# causes/care) mixed in with generic ones, which just went unused for a
+# non-medical corpus rather than causing wrong behavior, but wasn't actually
+# pulling its weight there either -- replaced with words that describe
+# reference-document titles broadly (policy manuals, legal guides, financial
+# handbooks, technical docs), not just clinical writeups.
 _GENERIC_TITLE_WORDS = {
-    "overview", "management", "strategies", "guidelines", "guideline",
-    "diagnosis", "treatment", "nutritional", "causes", "care", "approach",
-    "review", "and", "for", "of", "the", "a", "an", "with", "in", "on",
+    "overview", "guide", "guidelines", "guideline", "handbook", "manual",
+    "policy", "policies", "procedure", "procedures", "reference",
+    "documentation", "management", "strategies", "approach", "review",
+    "summary", "introduction", "basics",
+    "and", "for", "of", "the", "a", "an", "with", "in", "on",
 }
 
 
 def _topic_name(filename: str, title: str | None = None) -> str:
     """A short (<=2 word, 1 word if that's all that's left after filtering
-    out generic descriptors) topic name for question/group IDs -- derived
+    out generic descriptors) topic name for question/group IDs—derived
     from the corpus file's own `# Title` line, not the filename (which
     tends to be more verbose, e.g. "..._overview.md"). Falls back to the
     filename if no title is available, for corpora that don't follow this
     project's own `# Title` convention.
 
-    Not a fully general solution -- the descriptor stoplist is tuned to
+    Not a fully general solution; the descriptor stoplist is tuned to
     this kind of medical-writeup title, not guaranteed to pick the right
     word for an arbitrary future corpus's title style. Accepted tradeoff,
     per the user's explicit call: this is a cosmetic ID/label concern, not
@@ -120,7 +130,7 @@ def _file_title(text: str) -> str | None:
 def _generate_candidate(chunk: str) -> str:
     """One MicroDC call: a natural question a real person might ask that
     this specific real passage answers. Explicitly instructed not to
-    introduce facts beyond the passage -- generation is grounded, not
+    introduce facts beyond the passage; generation is grounded, not
     free invention; the coverage check afterward is the actual guarantee,
     this is just trying to make that check's job easy."""
     reply = microdc_client.chat(
@@ -133,7 +143,7 @@ def _generate_candidate(chunk: str) -> str:
                     "real reference text, write ONE natural question that a real person "
                     "might genuinely ask, which this passage directly and fully answers. "
                     "Do not introduce any fact, number, or claim not present in the "
-                    "passage. Reply with ONLY the question text -- no preamble, no "
+                    "passage. Reply with ONLY the question text—no preamble, no "
                     "quotes, no numbering."
                 ),
             },
@@ -147,7 +157,7 @@ def _generate_candidate(chunk: str) -> str:
 def _generate_variant(canonical_question: str, tone_hint: str) -> str:
     """One MicroDC call: reword canonical_question in a different
     tone/phrasing, preserving the exact same underlying question and
-    intent -- a paraphrase, not a new question."""
+    intent—a paraphrase, not a new question."""
     reply = microdc_client.chat(
         GENERATION_MODEL,
         [
@@ -155,10 +165,10 @@ def _generate_variant(canonical_question: str, tone_hint: str) -> str:
                 "role": "system",
                 "content": (
                     "You rewrite questions for an eval question set. Given a question, "
-                    "rewrite it so it asks the EXACT same underlying thing -- same "
-                    "intent, same expected answer -- but in a different tone/phrasing: "
+                    "rewrite it so it asks the EXACT same underlying thing—same "
+                    "intent, same expected answer—but in a different tone/phrasing: "
                     f"{tone_hint}. Do not change what's being asked, only how it's "
-                    "asked. Reply with ONLY the rewritten question -- no preamble, no "
+                    "asked. Reply with ONLY the rewritten question—no preamble, no "
                     "quotes, no numbering."
                 ),
             },
@@ -184,22 +194,42 @@ def generate_questions(
     questions_per_topic: int = QUESTIONS_PER_TOPIC_DEFAULT,
     variants_per_question: int = VARIANTS_PER_QUESTION_DEFAULT,
     verbose: bool = True,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Returns (questions, stats). questions is the same schema as
     questions/*.json (id/group_id/question). stats is one dict per topic:
     {topic, chunks_available, questions_requested, questions_accepted,
-    variants_requested, variants_accepted} -- for transparent
-    actual-vs-requested reporting, not silently generating fewer than asked."""
+    variants_requested, variants_accepted}—for transparent
+    actual-vs-requested reporting, not silently generating fewer than asked.
+
+    progress_callback(done, total), if given, fires once immediately with
+    (0, total_candidates) then again after each candidate question finishes
+    (accepted or discarded, variants included) -- candidate-level, not
+    variant-level, granularity: coarser than the eval loop's per-question
+    progress, but this can involve a real number of MicroDC round-trips
+    (one generation call per candidate, up to variants_per_question-1 more
+    per accepted candidate, plus the coverage/paraphrase checks each of
+    those triggers), so "nothing visible happening" for a while would
+    otherwise read as broken the same way the corpus-embedding phase did
+    before it got progress reporting."""
     chunks_by_file = retrieval.load_chunks_by_file()
     questions: list[dict] = []
     stats: list[dict] = []
+
+    # Precompute the total candidate count across every topic up front so
+    # the very first progress callback can report a real total immediately,
+    # not just after the first topic's own candidate count becomes known.
+    total_candidates = sum(min(len(chunks), questions_per_topic) for chunks in chunks_by_file.values())
+    done_candidates = 0
+    if progress_callback:
+        progress_callback(0, total_candidates)
 
     for fname, chunks in chunks_by_file.items():
         with open(os.path.join(config.CORPUS_DIR, fname)) as f:
             title = _file_title(f.read())
         topic = _topic_name(fname, title)
         # Richer (longer) passages make better question seeds than
-        # throwaway one-line sentences -- prioritize them when a topic has
+        # throwaway one-line sentences; prioritize them when a topic has
         # more chunks than the requested ceiling.
         candidate_chunks = sorted(chunks, key=len, reverse=True)[:questions_per_topic]
         topic_stats = {
@@ -219,6 +249,9 @@ def generate_questions(
             if not candidate or not _passes_coverage(candidate):
                 if verbose:
                     print(f"[{topic}] candidate discarded (failed coverage check): {candidate!r}")
+                done_candidates += 1
+                if progress_callback:
+                    progress_callback(done_candidates, total_candidates)
                 continue
 
             qidx += 1
@@ -247,6 +280,10 @@ def generate_questions(
 
             for vidx, v in enumerate(variants, start=1):
                 questions.append({"id": f"{group_id}-{vidx}", "group_id": group_id, "question": v})
+
+            done_candidates += 1
+            if progress_callback:
+                progress_callback(done_candidates, total_candidates)
 
         stats.append(topic_stats)
 

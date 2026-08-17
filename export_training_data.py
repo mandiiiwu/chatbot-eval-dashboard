@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """V2-E: export flagged/minor answers from a results file as JSONL, for
-manual review or later use as retraining data. Export only -- this doesn't
+manual review or later use as retraining data. Export only; this doesn't
 feed any fine-tuning pipeline (a deliberate future decision, see PLAN.md).
 
 Usage:
@@ -9,10 +9,10 @@ Usage:
     python export_training_data.py --output results/my_export.jsonl
 
 Each line is a JSON record: {id, question, severity, reason, rejected
-(the verified-wrong ungrounded answer), reference (the real corpus text --
+(the verified-wrong ungrounded answer), reference (the real corpus text—
 verified ground truth, not a model output), grounded_answer,
 grounded_answer_reliable (False if it trips the same vague-hedge detector
-the dashboard uses -- don't trust it blindly), target_model, run_timestamp}.
+the dashboard uses; don't trust it blindly), target_model, run_timestamp}.
 """
 
 import argparse
@@ -47,7 +47,7 @@ def main():
 
     unreliable = sum(1 for r in records if not r["grounded_answer_reliable"])
     print(f"{len(records)} record(s) exported (severity: flag/minor) from {results_path}")
-    print(f"  {unreliable} have an unreliable grounded_answer (vague-hedge detected) -- check before trusting")
+    print(f"  {unreliable} have an unreliable grounded_answer (vague-hedge detected); check before trusting")
     print(f"written to {output_path}")
 
 

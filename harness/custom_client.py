@@ -1,7 +1,7 @@
 """V2-G: generic templated HTTP client for any REST/JSON chatbot API that
 isn't OpenAI-compatible (ollama_client.py already covers those). Covers a
 custom in-house API's own request/response shape via user-supplied
-templates, rather than one-off provider code -- see config.py's comment
+templates, rather than one-off provider code—see config.py's comment
 for why a provider registry doesn't actually generalize to "most
 specific-purpose chatbots" the way a template does."""
 
@@ -19,7 +19,7 @@ class CustomClientError(RuntimeError):
 
 def _substitute(obj, replacements: dict[str, str]):
     """Recursively replaces placeholder strings within a *parsed* JSON
-    structure's string values, not the raw template text -- substituting
+    structure's string values, not the raw template text; substituting
     before re-serializing means json.dumps() handles all escaping
     correctly no matter what characters the message/system text contains
     (quotes, newlines, etc). Templating the raw JSON string directly would
@@ -65,12 +65,12 @@ def chat(
 ) -> str:
     """Same call shape as ollama_client.chat() so harness/target_client.py
     can dispatch between providers without evaluator.py knowing which one
-    is active. `model` becomes the {{model}} template placeholder -- a
+    is active. `model` becomes the {{model}} template placeholder—a
     label, not necessarily a real field the target API needs; only used if
     the user's own CUSTOM_REQUEST_TEMPLATE references it.
 
     The four endpoint_* parameters are per-call overrides of the matching
-    config.CUSTOM_* value -- lets the dashboard's [CONFIG] endpoint fields
+    config.CUSTOM_* value—lets the dashboard's [CONFIG] endpoint fields
     override .env for a single run without mutating global config, same
     pattern already used for target_model (evaluator.run_evaluation).
     None (the default) means "use the .env value", not "use an empty one"."""
@@ -81,7 +81,7 @@ def chat(
 
     if not url:
         raise CustomClientError(
-            "No custom endpoint URL configured -- set CUSTOM_ENDPOINT_URL in .env, "
+            "No custom endpoint URL configured; set CUSTOM_ENDPOINT_URL in .env, "
             "or fill in the endpoint_url field on the dashboard."
         )
 

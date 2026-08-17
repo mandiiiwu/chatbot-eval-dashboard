@@ -1,5 +1,5 @@
 """Thin wrapper around MicroDC.ai's OpenAI-compatible chat completions
-endpoint. No SDK needed -- it's a plain REST call."""
+endpoint. No SDK needed; it's a plain REST call."""
 
 import time
 
@@ -28,7 +28,7 @@ def chat(
 
     Retries on timeouts/connection errors: MicroDC runs jobs on a
     peer-to-peer GPU marketplace, so an individual worker occasionally
-    stalls -- that's not a real failure, just retry against (likely) a
+    stalls; that's not a real failure, just retry against (likely) a
     different worker.
     """
     api_key = config.require_api_key()

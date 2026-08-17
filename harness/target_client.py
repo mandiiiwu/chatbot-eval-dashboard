@@ -1,7 +1,7 @@
 """Dispatches target-model chat calls to whichever provider is configured
 (harness.ollama_client, or harness.custom_client for V2-G). evaluator.py
 imports chat() from here instead of a specific provider's client directly,
-so it stays provider-agnostic -- same domain-agnostic-code principle
+so it stays provider-agnostic—same domain-agnostic-code principle
 already applied everywhere else in harness/ (see PLAN.md's design
 principle at the top)."""
 
@@ -18,7 +18,7 @@ def chat(
     response_path: str | None = None,
 ) -> str:
     """provider and the endpoint_* params override config.TARGET_PROVIDER /
-    config.CUSTOM_* for this call only -- lets the dashboard's [CONFIG]
+    config.CUSTOM_* for this call only—lets the dashboard's [CONFIG]
     endpoint fields override .env per-run, same pattern as target_model."""
     provider = provider or config.TARGET_PROVIDER
     if provider == "custom":
